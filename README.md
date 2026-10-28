@@ -40,3 +40,7 @@ O frontend abre na porta indicada pelo Vite (normalmente `http://localhost:5173`
 Exceto pelo login e pela verificação de saúde, os endpoints exigem um token de sessão no cabeçalho `Authorization: Bearer <token>`. O quadro permite arrastar cartões entre as etapas; a tela de consulta é separada e mostra responsável, etapa, início e duração atual. A preferência de tema claro/escuro é guardada no navegador.
 
 O tempo atual é calculado a partir de `current_since`; cada encaminhamento, devolução ou conclusão preserva o evento anterior no histórico. Se o schema já foi instalado antes dessa atualização, aplique `ALTER TABLE task_history MODIFY action ENUM('created', 'forwarded', 'returned', 'completed') NOT NULL;` no MySQL.
+
+## Identidade visual
+
+O sistema usa azul institucional, amarelo de destaque e verde para indicadores, com superfícies neutras nos temas claro e escuro. SF Pro é priorizada nos dispositivos Apple quando instalada; nos demais sistemas, a fonte Inter variável é incluída no frontend para manter a tipografia consistente sem depender de instalação local.

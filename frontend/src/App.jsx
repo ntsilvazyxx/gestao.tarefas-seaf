@@ -74,21 +74,21 @@ function ThemeButton({ theme, toggleTheme }) {
 function LoginScreen({ onLogin, busy, error, theme, toggleTheme }) {
   return (
     <main className="login-screen" data-theme={theme}>
-      <div className="login-top"><a className="brand" href="#" onClick={(event) => event.preventDefault()}><span className="brand-mark"><ListTodo size={21} strokeWidth={2.5} /></span><span>fluxo<span className="brand-dot">.</span></span></a><ThemeButton theme={theme} toggleTheme={toggleTheme} /></div>
+      <div className="login-top"><span className="login-top-spacer" aria-hidden="true" /><ThemeButton theme={theme} toggleTheme={toggleTheme} /></div>
       <section className="login-card">
-        <div className="login-symbol"><UsersRound size={23} /></div>
-        <p className="eyebrow">BEM-VINDO DE VOLTA</p>
-        <h1>Acesse seu workspace</h1>
-        <p className="login-subtitle">Entre para acompanhar as tarefas da sua equipe.</p>
+        <h1 className="login-title">Sistema de Gestão de Tarefas - SEAF</h1>
+        <img className="login-logo" src="/seaf-logo.png" alt="SEAF — Secretaria de Estado de Agricultura Familiar e Governo de Mato Grosso" />
+        <p className="login-subtitle">Entre para acompanhar e organizar as tarefas da equipe.</p>
         {error && <div className="alert alert-error" role="alert">{error}</div>}
         <form className="modal-form login-form" onSubmit={onLogin}>
           <label>Usuário ou e-mail<input type="text" name="email" placeholder="Digite qualquer usuário" autoComplete="username" required maxLength="180" /></label>
           <label>Senha<input type="password" name="password" placeholder="Digite qualquer senha" autoComplete="current-password" required maxLength="256" /></label>
+          <div className="login-options"><a href="/recuperar-senha">Esqueceu a senha?</a></div>
           <button className="button button-primary login-submit" disabled={busy}>{busy ? <LoaderCircle className="spinner" size={17} /> : null} Entrar</button>
         </form>
         <p className="login-help">Acesso temporário: informe qualquer usuário e senha.</p>
       </section>
-      <p className="login-footer">Fluxo · Gestão de tarefas da equipe</p>
+      <p className="login-footer">Secretaria de Estado de Agricultura Familiar · Mato Grosso</p>
     </main>
   )
 }
