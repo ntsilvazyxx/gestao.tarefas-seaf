@@ -3,6 +3,7 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import cors from 'cors'
 import express from 'express'
 import pool from './db.js'
+import { getFallbackUser, getTaskDeadlineState, isTaskVisibleForUser } from './access.js'
 
 const app = express()
 const port = Number(process.env.PORT || 3001)
@@ -13,6 +14,32 @@ const allowedOrigins = new Set(
     .map((origin) => origin.trim())
     .filter(Boolean),
 )
+
+async function resolveMemberByLogin(email) {
+  const value = String(email || '').trim()
+  if (!value) return null
+
+  try {
+    const normalized = value.toLowerCase()
+    const [rows] = await pool.execute(
+      `SELECT id, name, department, email
+       FROM team_members
+       WHERE active = TRUE
+         AND (
+           LOWER(name) = ?
+           OR LOWER(email) = ?
+           OR LOWER(SUBSTRING_INDEX(email, '@', 1)) = ?
+         )
+       ORDER BY id ASC
+       LIMIT 1`,
+      [normalized, normalized, normalized],
+    )
+
+    return rows[0] || null
+  } catch {
+    return null
+  }
+}
 
 if (Buffer.byteLength(sessionSecret) < 32) {
   throw new Error('SESSION_SECRET deve ter pelo menos 32 caracteres.')
@@ -74,17 +101,22 @@ function authenticate(request, response, next) {
 
   try {
     const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'))
-    if (typeof payload.email !== 'string' || typeof payload.name !== 'string' || payload.exp <= Date.now()) {
+    if (typeof payload.email !== 'string' || typeof payload.name !== 'string' || (payload.department !== undefined && typeof payload.department !== 'string') || payload.exp <= Date.now()) {
       return response.status(401).json({ error: 'Sua sessão expirou. Entre novamente.' })
     }
-    request.user = { email: payload.email, name: payload.name }
+    request.user = {
+      email: payload.email,
+      name: payload.name,
+      member_id: Number.isInteger(Number(payload.member_id)) && Number(payload.member_id) > 0 ? Number(payload.member_id) : null,
+      department: typeof payload.department === 'string' ? payload.department : '',
+    }
     next()
   } catch {
     return response.status(401).json({ error: 'Sessão inválida. Entre novamente.' })
   }
 }
 
-app.post('/api/auth/login', (request, response) => {
+app.post('/api/auth/login', async (request, response) => {
   const { email, password } = request.body || {}
   if (typeof email !== 'string' || typeof password !== 'string'
     || !email.trim() || !password.trim() || email.length > 180 || password.length > 256) {
@@ -92,39 +124,57 @@ app.post('/api/auth/login', (request, response) => {
   }
 
   const identity = email.trim()
-  const user = {
-    email: identity,
-    name: identity.includes('@') ? identity.slice(0, identity.indexOf('@')) : identity,
-  }
+  const member = await resolveMemberByLogin(identity)
+  const user = getFallbackUser(identity, member)
   const token = signToken({ ...user, exp: Date.now() + 8 * 60 * 60 * 1000 })
   response.json({ token, user })
 })
 
 app.use('/api', authenticate)
 
-app.get('/api/members', async (_request, response, next) => {
+app.get('/api/members', async (request, response, next) => {
   try {
-    const [members] = await pool.execute(
-      'SELECT id, name FROM team_members WHERE active = TRUE ORDER BY name',
-    )
+    const department = request.user?.department
+    const [members] = department
+      ? await pool.execute(
+        'SELECT id, name, department FROM team_members WHERE active = TRUE AND department = ? ORDER BY name',
+        [department],
+      )
+      : await pool.execute(
+        'SELECT id, name, department FROM team_members WHERE active = TRUE ORDER BY name',
+      )
     response.json(members)
   } catch (error) {
     next(error)
   }
 })
 
-app.get('/api/tasks', async (_request, response, next) => {
+app.get('/api/tasks', async (request, response, next) => {
   try {
+    const department = request.user?.department || ''
+    const memberId = Number(request.user?.member_id || 0)
     const [tasks] = await pool.execute(`
       SELECT t.id, t.title, t.description, t.category, t.priority, t.status,
-        t.due_date, t.current_since, t.created_at, t.updated_at,
+        t.department, t.due_date, t.current_since, t.created_at, t.updated_at,
         t.assignee_id, m.name AS assignee_name
       FROM tasks t
       LEFT JOIN team_members m ON m.id = t.assignee_id
+      WHERE (? = '' OR t.department = ? OR t.assignee_id = ?)
       ORDER BY FIELD(t.status, 'in_progress', 'pending', 'completed'),
         COALESCE(t.due_date, '9999-12-31'), t.created_at DESC
-    `)
-    response.json(tasks)
+    `, [department, department, memberId])
+
+    const tasksWithAlerts = tasks.map((task) => {
+      const deadlineState = getTaskDeadlineState(task)
+      return {
+        ...task,
+        overdue: deadlineState.overdue,
+        dueSoon: deadlineState.dueSoon,
+        due_label: deadlineState.label,
+      }
+    })
+
+    response.json(tasksWithAlerts)
   } catch (error) {
     next(error)
   }
@@ -157,22 +207,24 @@ app.post('/api/tasks', async (request, response, next) => {
   try {
     await connection.beginTransaction()
     const memberId = assignee_id === null ? null : Number(assignee_id)
+    let taskDepartment = request.user?.department || ''
     if (memberId !== null) {
       const [members] = await connection.execute(
-        'SELECT id FROM team_members WHERE id = ? AND active = TRUE',
+        'SELECT id, department FROM team_members WHERE id = ? AND active = TRUE',
         [memberId],
       )
       if (!members.length) {
         await connection.rollback()
         return response.status(400).json({ error: 'O responsável selecionado não existe ou está inativo.' })
       }
+      taskDepartment = members[0].department || taskDepartment
     }
 
     const status = memberId === null ? 'pending' : 'in_progress'
     const [result] = await connection.execute(
-      `INSERT INTO tasks (title, description, category, priority, status, due_date, assignee_id, current_since)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [title.trim(), description.trim(), category.trim(), priority, status, due_date, memberId, memberId === null ? null : new Date()],
+      `INSERT INTO tasks (title, description, category, priority, status, due_date, department, assignee_id, current_since)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [title.trim(), description.trim(), category.trim(), priority, status, due_date, taskDepartment, memberId, memberId === null ? null : new Date()],
     )
     await connection.execute(
       `INSERT INTO task_history (task_id, action, from_member_id, to_member_id)
@@ -204,7 +256,7 @@ app.post('/api/tasks/:id/forward', async (request, response, next) => {
   try {
     await connection.beginTransaction()
     const [tasks] = await connection.execute(
-      'SELECT id, status, assignee_id FROM tasks WHERE id = ? FOR UPDATE',
+      'SELECT t.id, t.status, t.assignee_id, t.department, m.department AS current_department FROM tasks t LEFT JOIN team_members m ON m.id = t.assignee_id WHERE t.id = ? FOR UPDATE',
       [taskId],
     )
     if (!tasks.length) {
@@ -212,6 +264,10 @@ app.post('/api/tasks/:id/forward', async (request, response, next) => {
       return response.status(404).json({ error: 'Tarefa não encontrada.' })
     }
     const task = tasks[0]
+    if (!isTaskVisibleForUser(task, request.user)) {
+      await connection.rollback()
+      return response.status(403).json({ error: 'Você não tem permissão para acessar esta tarefa.' })
+    }
     if (task.status === 'completed') {
       await connection.rollback()
       return response.status(400).json({ error: 'Não é possível encaminhar uma tarefa concluída.' })
@@ -221,7 +277,7 @@ app.post('/api/tasks/:id/forward', async (request, response, next) => {
       return response.status(400).json({ error: 'A tarefa já está com essa pessoa.' })
     }
     const [members] = await connection.execute(
-      'SELECT id FROM team_members WHERE id = ? AND active = TRUE',
+      'SELECT id, department FROM team_members WHERE id = ? AND active = TRUE',
       [memberId],
     )
     if (!members.length) {
@@ -229,9 +285,10 @@ app.post('/api/tasks/:id/forward', async (request, response, next) => {
       return response.status(400).json({ error: 'A pessoa selecionada não existe ou está inativa.' })
     }
 
+    const nextDepartment = members[0].department || task.department || request.user?.department || ''
     await connection.execute(
-      'UPDATE tasks SET assignee_id = ?, status = ?, current_since = NOW() WHERE id = ?',
-      [memberId, 'in_progress', taskId],
+      'UPDATE tasks SET assignee_id = ?, department = ?, status = ?, current_since = NOW() WHERE id = ?',
+      [memberId, nextDepartment, 'in_progress', taskId],
     )
     await connection.execute(
       `INSERT INTO task_history (task_id, action, from_member_id, to_member_id, note)
@@ -262,7 +319,7 @@ app.post('/api/tasks/:id/return', async (request, response, next) => {
   try {
     await connection.beginTransaction()
     const [tasks] = await connection.execute(
-      'SELECT id, status, assignee_id FROM tasks WHERE id = ? FOR UPDATE',
+      'SELECT t.id, t.status, t.assignee_id, t.department FROM tasks t WHERE t.id = ? FOR UPDATE',
       [taskId],
     )
     if (!tasks.length) {
@@ -270,6 +327,10 @@ app.post('/api/tasks/:id/return', async (request, response, next) => {
       return response.status(404).json({ error: 'Tarefa não encontrada.' })
     }
     const task = tasks[0]
+    if (!isTaskVisibleForUser(task, request.user)) {
+      await connection.rollback()
+      return response.status(403).json({ error: 'Você não tem permissão para acessar esta tarefa.' })
+    }
     if (task.status === 'completed') {
       await connection.rollback()
       return response.status(400).json({ error: 'Não é possível devolver uma tarefa concluída.' })
@@ -280,8 +341,8 @@ app.post('/api/tasks/:id/return', async (request, response, next) => {
     }
 
     await connection.execute(
-      'UPDATE tasks SET assignee_id = NULL, status = ?, current_since = NULL WHERE id = ?',
-      ['pending', taskId],
+      'UPDATE tasks SET assignee_id = NULL, department = ?, status = ?, current_since = NULL WHERE id = ?',
+      [task.department || request.user?.department || '', 'pending', taskId],
     )
     await connection.execute(
       `INSERT INTO task_history (task_id, action, from_member_id, to_member_id, note)
@@ -312,7 +373,7 @@ app.post('/api/tasks/:id/complete', async (request, response, next) => {
   try {
     await connection.beginTransaction()
     const [tasks] = await connection.execute(
-      'SELECT id, status, assignee_id FROM tasks WHERE id = ? FOR UPDATE',
+      'SELECT t.id, t.status, t.assignee_id, t.department FROM tasks t WHERE t.id = ? FOR UPDATE',
       [taskId],
     )
     if (!tasks.length) {
@@ -320,6 +381,10 @@ app.post('/api/tasks/:id/complete', async (request, response, next) => {
       return response.status(404).json({ error: 'Tarefa não encontrada.' })
     }
     const task = tasks[0]
+    if (!isTaskVisibleForUser(task, request.user)) {
+      await connection.rollback()
+      return response.status(403).json({ error: 'Você não tem permissão para acessar esta tarefa.' })
+    }
     if (task.status === 'completed') {
       await connection.rollback()
       return response.status(400).json({ error: 'A tarefa já está concluída.' })
@@ -355,6 +420,17 @@ app.get('/api/tasks/:id/history', async (request, response, next) => {
   }
 
   try {
+    const [tasks] = await pool.execute(
+      'SELECT id, department, assignee_id, due_date, status FROM tasks WHERE id = ?',
+      [taskId],
+    )
+    if (!tasks.length) {
+      return response.status(404).json({ error: 'Tarefa não encontrada.' })
+    }
+    if (!isTaskVisibleForUser(tasks[0], request.user)) {
+      return response.status(403).json({ error: 'Você não tem permissão para acessar esta tarefa.' })
+    }
+
     const [entries] = await pool.execute(`
       SELECT h.id, h.action, h.from_member_id, h.to_member_id, h.note, h.created_at,
         source.name AS from_member_name, destination.name AS to_member_name
@@ -364,10 +440,6 @@ app.get('/api/tasks/:id/history', async (request, response, next) => {
       WHERE h.task_id = ?
       ORDER BY h.created_at DESC, h.id DESC
     `, [taskId])
-    if (!entries.length) {
-      const [tasks] = await pool.execute('SELECT id FROM tasks WHERE id = ?', [taskId])
-      if (!tasks.length) return response.status(404).json({ error: 'Tarefa não encontrada.' })
-    }
 
     const chronological = [...entries].reverse()
     const history = chronological.map((entry, index) => {
@@ -376,12 +448,131 @@ app.get('/api/tasks/:id/history', async (request, response, next) => {
         ? Math.max(0, Math.floor((new Date(nextEntry.created_at) - new Date(entry.created_at)) / 60000))
         : null
       return { ...entry, duration_minutes: durationMinutes }
+    }).reverse()
+
+    response.json({
+      task: {
+        ...tasks[0],
+        deadline_state: getTaskDeadlineState(tasks[0]),
+      },
+      history,
+      comments: await fetchTaskComments(taskId),
+      attachments: await fetchTaskAttachments(taskId),
     })
-    response.json(history.reverse())
   } catch (error) {
     next(error)
   }
 })
+
+app.post('/api/tasks/:id/comments', async (request, response, next) => {
+  const taskId = Number(request.params.id)
+  const message = request.body?.message ?? ''
+
+  if (!Number.isInteger(taskId) || taskId < 1) {
+    return response.status(400).json({ error: 'Tarefa inválida.' })
+  }
+  if (typeof message !== 'string' || !message.trim() || message.trim().length > 2000) {
+    return response.status(400).json({ error: 'O comentário deve ter até 2.000 caracteres.' })
+  }
+
+  try {
+    const [tasks] = await pool.execute('SELECT id, department, assignee_id FROM tasks WHERE id = ?', [taskId])
+    if (!tasks.length) return response.status(404).json({ error: 'Tarefa não encontrada.' })
+    if (!isTaskVisibleForUser(tasks[0], request.user)) {
+      return response.status(403).json({ error: 'Você não tem permissão para comentar nesta tarefa.' })
+    }
+
+    const memberId = Number(request.user.member_id)
+    if (!Number.isInteger(memberId) || memberId < 1) {
+      return response.status(403).json({ error: 'Sessão inválida para registrar comentário.' })
+    }
+
+    const [result] = await pool.execute(
+      'INSERT INTO task_comments (task_id, member_id, message) VALUES (?, ?, ?)',
+      [taskId, memberId, message.trim()],
+    )
+
+    const [comment] = await pool.execute(`
+      SELECT c.id, c.task_id, c.member_id, c.message, c.created_at,
+        m.name AS member_name
+      FROM task_comments c
+      LEFT JOIN team_members m ON m.id = c.member_id
+      WHERE c.id = ?
+    `, [result.insertId])
+
+    response.status(201).json(comment[0])
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/tasks/:id/attachments', async (request, response, next) => {
+  const taskId = Number(request.params.id)
+  const { filename, content_type, data } = request.body || {}
+
+  if (!Number.isInteger(taskId) || taskId < 1) {
+    return response.status(400).json({ error: 'Tarefa inválida.' })
+  }
+  if (typeof filename !== 'string' || !filename.trim() || typeof data !== 'string' || !data) {
+    return response.status(400).json({ error: 'Selecione um arquivo para anexar.' })
+  }
+
+  try {
+    const [tasks] = await pool.execute('SELECT id, department, assignee_id FROM tasks WHERE id = ?', [taskId])
+    if (!tasks.length) return response.status(404).json({ error: 'Tarefa não encontrada.' })
+    if (!isTaskVisibleForUser(tasks[0], request.user)) {
+      return response.status(403).json({ error: 'Você não tem permissão para anexar arquivo nesta tarefa.' })
+    }
+
+    const memberId = Number(request.user.member_id)
+    if (!Number.isInteger(memberId) || memberId < 1) {
+      return response.status(403).json({ error: 'Sessão inválida para anexar arquivo.' })
+    }
+
+    const binaryData = Buffer.from(data.includes(',') ? data.split(',')[1] : data, 'base64')
+    const [result] = await pool.execute(
+      `INSERT INTO task_attachments (task_id, member_id, filename, content_type, size_bytes, data)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [taskId, memberId, filename.trim().slice(0, 255), content_type || 'application/octet-stream', binaryData.length, binaryData],
+    )
+
+    const [attachment] = await pool.execute(`
+      SELECT a.id, a.task_id, a.member_id, a.filename, a.content_type, a.size_bytes, a.created_at,
+        m.name AS member_name
+      FROM task_attachments a
+      LEFT JOIN team_members m ON m.id = a.member_id
+      WHERE a.id = ?
+    `, [result.insertId])
+
+    response.status(201).json(attachment[0])
+  } catch (error) {
+    next(error)
+  }
+})
+
+async function fetchTaskComments(taskId) {
+  const [comments] = await pool.execute(`
+    SELECT c.id, c.task_id, c.member_id, c.message, c.created_at,
+      m.name AS member_name
+    FROM task_comments c
+    LEFT JOIN team_members m ON m.id = c.member_id
+    WHERE c.task_id = ?
+    ORDER BY c.created_at ASC
+  `, [taskId])
+  return comments
+}
+
+async function fetchTaskAttachments(taskId) {
+  const [attachments] = await pool.execute(`
+    SELECT a.id, a.task_id, a.member_id, a.filename, a.content_type, a.size_bytes, a.created_at,
+      m.name AS member_name
+    FROM task_attachments a
+    LEFT JOIN team_members m ON m.id = a.member_id
+    WHERE a.task_id = ?
+    ORDER BY a.created_at ASC
+  `, [taskId])
+  return attachments
+}
 
 app.use((error, _request, response, _next) => {
   console.error('Erro na API:', error)

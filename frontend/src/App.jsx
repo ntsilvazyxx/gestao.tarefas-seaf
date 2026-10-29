@@ -62,6 +62,26 @@ function formatDate(date) {
   return new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short' }).format(parsedDate)
 }
 
+function getDeadlineState(task) {
+  if (!task || !task.due_date || task.status === 'completed') {
+    return { overdue: false, dueSoon: false, label: 'Sem prazo' }
+  }
+
+  const dueDate = new Date(`${task.due_date}T23:59:59`)
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+
+  const diffDays = Math.ceil((dueDate.getTime() - today.getTime()) / 86400000)
+  const overdue = diffDays < 0
+  const dueSoon = diffDays >= 0 && diffDays <= 2
+
+  return {
+    overdue,
+    dueSoon,
+    label: overdue ? `Atrasado há ${Math.abs(diffDays)} dia(s)` : diffDays === 0 ? 'Vence hoje' : diffDays === 1 ? 'Vence amanhã' : `Faltam ${diffDays} dia(s)`,
+  }
+}
+
 function ThemeButton({ theme, toggleTheme }) {
   const isDark = theme === 'dark'
   return (
@@ -116,7 +136,7 @@ function TaskCard({ task, now, openHistory, showMovement, completeTask }) {
       </div>
       <div className="card-bottomline">
         <span className={`elapsed${task.status === 'pending' ? ' waiting' : ''}`}><Clock3 size={13} /> {task.status === 'completed' ? 'Finalizada' : formatElapsed(task.current_since, now)}</span>
-        <span className="due-date"><CalendarDays size={13} />{formatDate(task.due_date)}</span>
+        <span className={`due-date${task.overdue ? ' overdue' : task.dueSoon ? ' due-soon' : ''}`}><CalendarDays size={13} />{formatDate(task.due_date)}{task.due_date && task.due_date !== '0000-00-00' ? ` · ${getDeadlineState(task).label}` : ''}</span>
       </div>
       <div className="card-actions">
         {task.status === 'pending' && <button className="card-action-button" onClick={() => showMovement(task, 'forward')}><Send size={13} /> Encaminhar</button>}
@@ -142,6 +162,8 @@ function App() {
   const [modal, setModal] = useState(null)
   const [selectedTask, setSelectedTask] = useState(null)
   const [history, setHistory] = useState([])
+  const [comments, setComments] = useState([])
+  const [attachments, setAttachments] = useState([])
   const [loading, setLoading] = useState(Boolean(token))
   const [now, setNow] = useState(initialClock)
   const [saving, setSaving] = useState(false)
@@ -283,14 +305,65 @@ function App() {
     setSelectedTask(task)
     setModal('history')
     setHistory([])
+    setComments([])
+    setAttachments([])
     try {
       const response = await apiFetch(`/tasks/${task.id}/history`)
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || 'Não foi possível consultar o histórico.')
-      setHistory(result)
+      setSelectedTask(result.task || task)
+      setHistory(result.history || [])
+      setComments(result.comments || [])
+      setAttachments(result.attachments || [])
     } catch (requestError) {
       setError(requestError.message)
     }
+  }
+
+  async function submitComment(event) {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    const message = String(form.get('message') || '').trim()
+    if (!message || !selectedTask) return
+
+    try {
+      const response = await apiFetch(`/tasks/${selectedTask.id}/comments`, {
+        method: 'POST',
+        body: JSON.stringify({ message }),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'Não foi possível enviar o comentário.')
+      setComments((current) => [...current, result])
+      event.currentTarget.reset()
+    } catch (requestError) {
+      setError(requestError.message)
+    }
+  }
+
+  async function submitAttachment(event) {
+    const file = event.target.files?.[0]
+    if (!file || !selectedTask) return
+
+    const reader = new FileReader()
+    reader.onload = async () => {
+      try {
+        const response = await apiFetch(`/tasks/${selectedTask.id}/attachments`, {
+          method: 'POST',
+          body: JSON.stringify({
+            filename: file.name,
+            content_type: file.type || 'application/octet-stream',
+            data: String(reader.result || ''),
+          }),
+        })
+        const result = await response.json()
+        if (!response.ok) throw new Error(result.error || 'Não foi possível anexar o arquivo.')
+        setAttachments((current) => [...current, result])
+      } catch (requestError) {
+        setError(requestError.message)
+      }
+    }
+    reader.readAsDataURL(file)
+    event.target.value = ''
   }
 
   async function submitTask(event) {
@@ -469,9 +542,28 @@ function App() {
             <div className="modal-actions"><button type="button" className="button button-secondary" onClick={() => setModal(null)}>Cancelar</button><button className="button button-primary" disabled={saving}>{saving ? <LoaderCircle className="spinner" size={16} /> : modal === 'return' ? <ArrowDownLeft size={16} /> : <Send size={15} />}{modal === 'return' ? 'Devolver para fila' : 'Encaminhar tarefa'}</button></div>
           </form>}
           {modal === 'history' && <div className="history-content">
-            <div className="history-task-summary"><span className="modal-kicker">TAREFA</span><h3>{selectedTask?.title}</h3><p>{selectedTask?.description || selectedTask?.category || 'Sem descrição adicional.'}</p><div className="history-summary-meta"><span className={`priority priority-${selectedTask?.priority}`}>{priorities[selectedTask?.priority] || 'Média'} prioridade</span><span><Clock3 size={14} /> {selectedTask?.status === 'completed' ? 'Tarefa concluída' : formatElapsed(selectedTask?.current_since, now)}{selectedTask?.status !== 'completed' && ' nesta etapa'}</span></div></div>
+            <div className="history-task-summary"><span className="modal-kicker">TAREFA</span><h3>{selectedTask?.title}</h3><p>{selectedTask?.description || selectedTask?.category || 'Sem descrição adicional.'}</p><div className="history-summary-meta"><span className={`priority priority-${selectedTask?.priority}`}>{priorities[selectedTask?.priority] || 'Média'} prioridade</span><span><Clock3 size={14} /> {selectedTask?.status === 'completed' ? 'Tarefa concluída' : formatElapsed(selectedTask?.current_since, now)}{selectedTask?.status !== 'completed' && ' nesta etapa'}</span>{selectedTask?.due_date && <span className={getDeadlineState(selectedTask).overdue ? 'deadline overdue' : getDeadlineState(selectedTask).dueSoon ? 'deadline due-soon' : 'deadline'}>{getDeadlineState(selectedTask).label}</span>}</div></div>
             <h3 className="timeline-heading">Movimentações <span>{history.length}</span></h3>
             {history.length === 0 ? <p className="empty-history">Nenhuma movimentação registrada.</p> : <ol className="timeline">{history.map((item) => <li key={item.id} className="timeline-item"><span className={`timeline-marker ${item.action}`} /><div className="timeline-entry"><strong>{item.action === 'created' ? 'Tarefa criada' : item.action === 'forwarded' ? 'Tarefa encaminhada' : item.action === 'returned' ? 'Tarefa devolvida' : 'Tarefa concluída'}</strong><p>{item.action === 'created' ? `Criada${item.to_member_name ? ` e atribuída a ${item.to_member_name}` : ' na fila'}` : item.action === 'forwarded' ? `${item.from_member_name || 'Fila'} → ${item.to_member_name}` : item.action === 'returned' ? `${item.from_member_name || 'Responsável'} → Fila de tarefas` : `Concluída por ${item.from_member_name || 'responsável'}`}</p>{item.note && <blockquote>{item.note}</blockquote>}<small>{new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(item.created_at))}{item.duration_minutes != null && ` · permaneceu ${formatDuration(item.duration_minutes)}`}</small></div></li>)}</ol>}
+
+            <div className="detail-section">
+              <h3 className="timeline-heading">Comentários <span>{comments.length}</span></h3>
+              <form className="comment-form" onSubmit={submitComment}>
+                <textarea name="message" rows="2" placeholder="Adicionar comentário sobre a tarefa..." required maxLength="2000" />
+                <button type="submit" className="button button-primary">Comentar</button>
+              </form>
+              {comments.length === 0 ? <p className="empty-history">Nenhum comentário registrado.</p> : <ul className="comment-list">{comments.map((comment) => <li key={comment.id}><strong>{comment.member_name || 'Usuário'}</strong><p>{comment.message}</p><small>{new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(comment.created_at))}</small></li>)}</ul>}
+            </div>
+
+            <div className="detail-section">
+              <h3 className="timeline-heading">Anexos <span>{attachments.length}</span></h3>
+              <label className="upload-field">
+                <input type="file" onChange={submitAttachment} />
+                <span>Selecionar arquivo</span>
+              </label>
+              {attachments.length === 0 ? <p className="empty-history">Nenhum anexo enviado.</p> : <ul className="attachment-list">{attachments.map((file) => <li key={file.id}><a href={`data:${file.content_type};base64,${file.data ? btoa(String.fromCharCode(...new Uint8Array(file.data))) : ''}`} download={file.filename}>{file.filename}</a><small>{file.size_bytes ? `${Math.max(1, Math.round(file.size_bytes / 1024))} KB` : 'Arquivo'}</small></li>)}</ul>}
+            </div>
+
             <div className="modal-actions"><button className="button button-secondary" onClick={() => setModal(null)}>Fechar</button>{selectedTask?.status !== 'completed' && (selectedTask?.assignee_id ? <button className="button button-primary" onClick={() => showMovement(selectedTask, 'return')}><ArrowDownLeft size={16} /> Devolver tarefa</button> : <button className="button button-primary" onClick={() => showMovement(selectedTask, 'forward')}><Send size={15} /> Encaminhar tarefa</button>)}</div>
           </div>}
         </section>
