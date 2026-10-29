@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE TABLE IF NOT EXISTS task_history (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   task_id BIGINT UNSIGNED NOT NULL,
-  action ENUM('created', 'forwarded', 'returned', 'completed') NOT NULL,
+  action ENUM('created', 'forwarded', 'returned', 'completed', 'reopened') NOT NULL,
   from_member_id INT UNSIGNED NULL,
   to_member_id INT UNSIGNED NULL,
   note VARCHAR(1000) NULL,
@@ -57,7 +57,9 @@ CREATE TABLE IF NOT EXISTS task_history (
 CREATE TABLE IF NOT EXISTS task_comments (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   task_id BIGINT UNSIGNED NOT NULL,
-  member_id INT UNSIGNED NOT NULL,
+  member_id INT UNSIGNED NULL,
+  author_name VARCHAR(120) NOT NULL DEFAULT 'Usuário',
+  author_email VARCHAR(180) NULL,
   message TEXT NOT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
@@ -65,13 +67,15 @@ CREATE TABLE IF NOT EXISTS task_comments (
   CONSTRAINT fk_comments_task FOREIGN KEY (task_id)
     REFERENCES tasks (id) ON DELETE CASCADE,
   CONSTRAINT fk_comments_member FOREIGN KEY (member_id)
-    REFERENCES team_members (id) ON DELETE CASCADE
+    REFERENCES team_members (id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS task_attachments (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   task_id BIGINT UNSIGNED NOT NULL,
-  member_id INT UNSIGNED NOT NULL,
+  member_id INT UNSIGNED NULL,
+  author_name VARCHAR(120) NOT NULL DEFAULT 'Usuário',
+  author_email VARCHAR(180) NULL,
   filename VARCHAR(255) NOT NULL,
   content_type VARCHAR(120) NOT NULL,
   size_bytes INT UNSIGNED NOT NULL DEFAULT 0,
@@ -82,7 +86,7 @@ CREATE TABLE IF NOT EXISTS task_attachments (
   CONSTRAINT fk_attachments_task FOREIGN KEY (task_id)
     REFERENCES tasks (id) ON DELETE CASCADE,
   CONSTRAINT fk_attachments_member FOREIGN KEY (member_id)
-    REFERENCES team_members (id) ON DELETE CASCADE
+    REFERENCES team_members (id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
 INSERT INTO team_members (name, email, department)

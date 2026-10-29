@@ -2,8 +2,9 @@ import 'dotenv/config'
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import cors from 'cors'
 import express from 'express'
+import multer from 'multer'
 import pool from './db.js'
-import { getFallbackUser, getTaskDeadlineState, isTaskVisibleForUser } from './access.js'
+import { getFallbackUser, getTaskDeadlineState, isTaskVisibleForUser, isTestAdmin } from './access.js'
 
 const app = express()
 const port = Number(process.env.PORT || 3001)
@@ -64,6 +65,23 @@ app.use(cors({
   },
 }))
 app.use(express.json({ limit: '1mb' }))
+const uploadAttachment = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+}).single('file')
+
+function parseAttachmentUpload(request, response, next) {
+  uploadAttachment(request, response, (error) => {
+    if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+      return response.status(413).json({ error: 'O anexo deve ter no máximo 5 MB.' })
+    }
+    if (error instanceof multer.MulterError) {
+      return response.status(400).json({ error: 'Não foi possível processar o arquivo enviado.' })
+    }
+    if (error) return next(error)
+    next()
+  })
+}
 
 app.get('/api/health', async (_request, response, next) => {
   try {
@@ -109,6 +127,7 @@ function authenticate(request, response, next) {
       name: payload.name,
       member_id: Number.isInteger(Number(payload.member_id)) && Number(payload.member_id) > 0 ? Number(payload.member_id) : null,
       department: typeof payload.department === 'string' ? payload.department : '',
+      is_admin: payload.is_admin === true,
     }
     next()
   } catch {
@@ -125,16 +144,131 @@ app.post('/api/auth/login', async (request, response) => {
 
   const identity = email.trim()
   const member = await resolveMemberByLogin(identity)
-  const user = getFallbackUser(identity, member)
+  const user = { ...getFallbackUser(identity, member), is_admin: isTestAdmin(identity) }
   const token = signToken({ ...user, exp: Date.now() + 8 * 60 * 60 * 1000 })
   response.json({ token, user })
 })
 
 app.use('/api', authenticate)
 
+function requireTestAdmin(request, response, next) {
+  if (!request.user?.is_admin || process.env.NODE_ENV === 'production') {
+    return response.status(403).json({ error: 'Apenas o administrador de teste pode gerenciar perfis.' })
+  }
+  next()
+}
+
+function validateMemberProfile(body) {
+  const name = typeof body.name === 'string' ? body.name.trim() : ''
+  const department = typeof body.department === 'string' ? body.department.trim() : ''
+  const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''
+  if (!name || name.length > 120) return { error: 'Informe um nome de até 120 caracteres.' }
+  if (!department || department.length > 80) return { error: 'Informe um departamento de até 80 caracteres.' }
+  if (email.length > 180 || (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
+    return { error: 'Informe um e-mail válido de até 180 caracteres ou deixe o campo vazio.' }
+  }
+  if (body.active !== undefined && typeof body.active !== 'boolean') {
+    return { error: 'O status do perfil é inválido.' }
+  }
+  return { profile: { name, department, email: email || null, active: body.active ?? true } }
+}
+
+app.get('/api/admin/members', requireTestAdmin, async (request, response, next) => {
+  try {
+    const [members] = await pool.execute(
+      'SELECT id, name, department, email, active, created_at FROM team_members ORDER BY active DESC, name',
+    )
+    response.json(members)
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/admin/members', requireTestAdmin, async (request, response, next) => {
+  const validation = validateMemberProfile(request.body || {})
+  if (validation.error) return response.status(400).json({ error: validation.error })
+  const { name, department, email, active } = validation.profile
+  try {
+    if (email) {
+      const [existing] = await pool.execute('SELECT id FROM team_members WHERE LOWER(email) = ?', [email])
+      if (existing.length) return response.status(409).json({ error: 'Já existe um perfil com esse e-mail.' })
+    }
+    const [result] = await pool.execute(
+      'INSERT INTO team_members (name, department, email, active) VALUES (?, ?, ?, ?)',
+      [name, department, email, active],
+    )
+    const [created] = await pool.execute(
+      'SELECT id, name, department, email, active, created_at FROM team_members WHERE id = ?',
+      [result.insertId],
+    )
+    response.status(201).json(created[0])
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.patch('/api/admin/members/:id', requireTestAdmin, async (request, response, next) => {
+  const memberId = Number(request.params.id)
+  if (!Number.isInteger(memberId) || memberId < 1) return response.status(400).json({ error: 'Perfil inválido.' })
+  const connection = await pool.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [rows] = await connection.execute(
+      'SELECT id, name, department, email, active FROM team_members WHERE id = ? FOR UPDATE',
+      [memberId],
+    )
+    if (!rows.length) {
+      await connection.rollback()
+      return response.status(404).json({ error: 'Perfil não encontrado.' })
+    }
+
+    const validation = validateMemberProfile({
+      ...rows[0],
+      active: Boolean(rows[0].active),
+      ...request.body,
+    })
+    if (validation.error) {
+      await connection.rollback()
+      return response.status(400).json({ error: validation.error })
+    }
+    const { name, department, email, active } = validation.profile
+    if (email) {
+      const [existing] = await connection.execute(
+        'SELECT id FROM team_members WHERE LOWER(email) = ? AND id <> ?',
+        [email, memberId],
+      )
+      if (existing.length) {
+        await connection.rollback()
+        return response.status(409).json({ error: 'Já existe um perfil com esse e-mail.' })
+      }
+    }
+    await connection.execute(
+      'UPDATE team_members SET name = ?, department = ?, email = ?, active = ? WHERE id = ?',
+      [name, department, email, active, memberId],
+    )
+    if (department !== rows[0].department) {
+      await connection.execute(
+        "UPDATE tasks SET department = ? WHERE assignee_id = ? AND status = 'in_progress'",
+        [department, memberId],
+      )
+    }
+    const [updated] = await connection.execute(
+      'SELECT id, name, department, email, active, created_at FROM team_members WHERE id = ?',
+      [memberId],
+    )
+    await connection.commit()
+    response.json(updated[0])
+  } catch (error) {
+    await connection.rollback()
+    next(error)
+  } finally {
+    connection.release()
+  }
+})
+
 app.get('/api/members', async (request, response, next) => {
   try {
-    const department = request.user?.department
+    const department = request.user?.is_admin ? '' : request.user?.department
     const [members] = department
       ? await pool.execute(
         'SELECT id, name, department FROM team_members WHERE active = TRUE AND department = ? ORDER BY name',
@@ -151,7 +285,7 @@ app.get('/api/members', async (request, response, next) => {
 
 app.get('/api/tasks', async (request, response, next) => {
   try {
-    const department = request.user?.department || ''
+    const department = request.user?.is_admin ? '' : request.user?.department || ''
     const memberId = Number(request.user?.member_id || 0)
     const [tasks] = await pool.execute(`
       SELECT t.id, t.title, t.description, t.category, t.priority, t.status,
@@ -251,7 +385,6 @@ app.post('/api/tasks/:id/forward', async (request, response, next) => {
   if (typeof note !== 'string' || note.length > 1000) {
     return response.status(400).json({ error: 'A observação deve ter no máximo 1.000 caracteres.' })
   }
-
   const connection = await pool.getConnection()
   try {
     await connection.beginTransaction()
@@ -313,6 +446,9 @@ app.post('/api/tasks/:id/return', async (request, response, next) => {
   }
   if (typeof note !== 'string' || note.length > 1000) {
     return response.status(400).json({ error: 'A observação deve ter no máximo 1.000 caracteres.' })
+  }
+  if (!note.trim()) {
+    return response.status(400).json({ error: 'Informe o motivo da devolução.' })
   }
 
   const connection = await pool.getConnection()
@@ -413,6 +549,75 @@ app.post('/api/tasks/:id/complete', async (request, response, next) => {
   }
 })
 
+app.post('/api/tasks/:id/reopen', requireTestAdmin, async (request, response, next) => {
+  const taskId = Number(request.params.id)
+  if (!Number.isInteger(taskId) || taskId < 1) {
+    return response.status(400).json({ error: 'Tarefa inválida.' })
+  }
+
+  const connection = await pool.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [tasks] = await connection.execute(
+      'SELECT id, status FROM tasks WHERE id = ? FOR UPDATE',
+      [taskId],
+    )
+    if (!tasks.length) {
+      await connection.rollback()
+      return response.status(404).json({ error: 'Tarefa não encontrada.' })
+    }
+    if (tasks[0].status !== 'completed') {
+      await connection.rollback()
+      return response.status(400).json({ error: 'Somente tarefas concluídas podem ser reabertas.' })
+    }
+
+    const [completions] = await connection.execute(
+      `SELECT from_member_id
+       FROM task_history
+       WHERE task_id = ? AND action = 'completed'
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`,
+      [taskId],
+    )
+    const previousAssigneeId = completions[0]?.from_member_id
+    if (!previousAssigneeId) {
+      await connection.rollback()
+      return response.status(409).json({ error: 'Não foi possível identificar o responsável anterior da tarefa.' })
+    }
+    const [members] = await connection.execute(
+      'SELECT id, department, active FROM team_members WHERE id = ? FOR UPDATE',
+      [previousAssigneeId],
+    )
+    if (!members.length) {
+      await connection.rollback()
+      return response.status(409).json({ error: 'O responsável anterior não está disponível.' })
+    }
+    if (!members[0].active) {
+      await connection.rollback()
+      return response.status(409).json({ error: 'O responsável anterior está inativo. Ative o perfil antes de reabrir a tarefa.' })
+    }
+
+    await connection.execute(
+      `UPDATE tasks
+       SET assignee_id = ?, department = ?, status = 'in_progress', current_since = NOW()
+       WHERE id = ?`,
+      [members[0].id, members[0].department, taskId],
+    )
+    await connection.execute(
+      `INSERT INTO task_history (task_id, action, from_member_id, to_member_id, note)
+       VALUES (?, 'reopened', NULL, ?, 'Reaberta pelo administrador de teste.')`,
+      [taskId, members[0].id],
+    )
+    await connection.commit()
+    response.json({ message: 'Tarefa reaberta para o responsável anterior.' })
+  } catch (error) {
+    await connection.rollback()
+    next(error)
+  } finally {
+    connection.release()
+  }
+})
+
 app.get('/api/tasks/:id/history', async (request, response, next) => {
   const taskId = Number(request.params.id)
   if (!Number.isInteger(taskId) || taskId < 1) {
@@ -482,19 +687,16 @@ app.post('/api/tasks/:id/comments', async (request, response, next) => {
       return response.status(403).json({ error: 'Você não tem permissão para comentar nesta tarefa.' })
     }
 
-    const memberId = Number(request.user.member_id)
-    if (!Number.isInteger(memberId) || memberId < 1) {
-      return response.status(403).json({ error: 'Sessão inválida para registrar comentário.' })
-    }
+    const memberId = request.user.member_id
 
     const [result] = await pool.execute(
-      'INSERT INTO task_comments (task_id, member_id, message) VALUES (?, ?, ?)',
-      [taskId, memberId, message.trim()],
+      'INSERT INTO task_comments (task_id, member_id, author_name, author_email, message) VALUES (?, ?, ?, ?, ?)',
+      [taskId, memberId, request.user.name, request.user.email, message.trim()],
     )
 
     const [comment] = await pool.execute(`
       SELECT c.id, c.task_id, c.member_id, c.message, c.created_at,
-        m.name AS member_name
+        COALESCE(NULLIF(c.author_name, 'Usuário'), m.name, c.author_name) AS member_name
       FROM task_comments c
       LEFT JOIN team_members m ON m.id = c.member_id
       WHERE c.id = ?
@@ -506,14 +708,13 @@ app.post('/api/tasks/:id/comments', async (request, response, next) => {
   }
 })
 
-app.post('/api/tasks/:id/attachments', async (request, response, next) => {
+app.post('/api/tasks/:id/attachments', parseAttachmentUpload, async (request, response, next) => {
   const taskId = Number(request.params.id)
-  const { filename, content_type, data } = request.body || {}
 
   if (!Number.isInteger(taskId) || taskId < 1) {
     return response.status(400).json({ error: 'Tarefa inválida.' })
   }
-  if (typeof filename !== 'string' || !filename.trim() || typeof data !== 'string' || !data) {
+  if (!request.file) {
     return response.status(400).json({ error: 'Selecione um arquivo para anexar.' })
   }
 
@@ -524,21 +725,18 @@ app.post('/api/tasks/:id/attachments', async (request, response, next) => {
       return response.status(403).json({ error: 'Você não tem permissão para anexar arquivo nesta tarefa.' })
     }
 
-    const memberId = Number(request.user.member_id)
-    if (!Number.isInteger(memberId) || memberId < 1) {
-      return response.status(403).json({ error: 'Sessão inválida para anexar arquivo.' })
-    }
-
-    const binaryData = Buffer.from(data.includes(',') ? data.split(',')[1] : data, 'base64')
+    const memberId = request.user.member_id
+    const filename = request.file.originalname.replace(/[\\/\r\n"]/g, '_').trim().slice(0, 255)
+    if (!filename) return response.status(400).json({ error: 'O nome do arquivo é inválido.' })
     const [result] = await pool.execute(
-      `INSERT INTO task_attachments (task_id, member_id, filename, content_type, size_bytes, data)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [taskId, memberId, filename.trim().slice(0, 255), content_type || 'application/octet-stream', binaryData.length, binaryData],
+      `INSERT INTO task_attachments (task_id, member_id, author_name, author_email, filename, content_type, size_bytes, data)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [taskId, memberId, request.user.name.slice(0, 120), request.user.email.slice(0, 180), filename, (request.file.mimetype || 'application/octet-stream').slice(0, 120), request.file.size, request.file.buffer],
     )
 
     const [attachment] = await pool.execute(`
       SELECT a.id, a.task_id, a.member_id, a.filename, a.content_type, a.size_bytes, a.created_at,
-        m.name AS member_name
+        COALESCE(NULLIF(a.author_name, 'Usuário'), m.name, a.author_name) AS member_name
       FROM task_attachments a
       LEFT JOIN team_members m ON m.id = a.member_id
       WHERE a.id = ?
@@ -550,10 +748,44 @@ app.post('/api/tasks/:id/attachments', async (request, response, next) => {
   }
 })
 
+app.get('/api/tasks/:taskId/attachments/:attachmentId', async (request, response, next) => {
+  const taskId = Number(request.params.taskId)
+  const attachmentId = Number(request.params.attachmentId)
+  if (!Number.isInteger(taskId) || taskId < 1 || !Number.isInteger(attachmentId) || attachmentId < 1) {
+    return response.status(400).json({ error: 'Tarefa ou anexo inválido.' })
+  }
+
+  try {
+    const [rows] = await pool.execute(`
+      SELECT a.filename, a.content_type, a.data, t.department, t.assignee_id
+      FROM task_attachments a
+      JOIN tasks t ON t.id = a.task_id
+      WHERE a.id = ? AND a.task_id = ?
+    `, [attachmentId, taskId])
+    if (!rows.length) return response.status(404).json({ error: 'Anexo não encontrado.' })
+
+    const attachment = rows[0]
+    if (!isTaskVisibleForUser(attachment, request.user)) {
+      return response.status(403).json({ error: 'Você não tem permissão para baixar este anexo.' })
+    }
+
+    response.set({
+      'Content-Type': attachment.content_type || 'application/octet-stream',
+      'Content-Length': attachment.data.length,
+      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(attachment.filename)}`,
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'private, no-store',
+    })
+    response.send(attachment.data)
+  } catch (error) {
+    next(error)
+  }
+})
+
 async function fetchTaskComments(taskId) {
   const [comments] = await pool.execute(`
     SELECT c.id, c.task_id, c.member_id, c.message, c.created_at,
-      m.name AS member_name
+      COALESCE(NULLIF(c.author_name, 'Usuário'), m.name, c.author_name) AS member_name
     FROM task_comments c
     LEFT JOIN team_members m ON m.id = c.member_id
     WHERE c.task_id = ?
@@ -565,7 +797,7 @@ async function fetchTaskComments(taskId) {
 async function fetchTaskAttachments(taskId) {
   const [attachments] = await pool.execute(`
     SELECT a.id, a.task_id, a.member_id, a.filename, a.content_type, a.size_bytes, a.created_at,
-      m.name AS member_name
+      COALESCE(NULLIF(a.author_name, 'Usuário'), m.name, a.author_name) AS member_name
     FROM task_attachments a
     LEFT JOIN team_members m ON m.id = a.member_id
     WHERE a.task_id = ?

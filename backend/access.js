@@ -1,5 +1,6 @@
 export function isTaskVisibleForUser(task, user) {
   if (!task || !user) return false
+  if (user.is_admin === true) return true
 
   const taskDepartment = typeof task.department === 'string' ? task.department.trim() : ''
   const userDepartment = typeof user.department === 'string' ? user.department.trim() : ''
@@ -31,16 +32,29 @@ export function getFallbackUser(identity, member = null) {
   }
 }
 
+export function isTestAdmin(identity, environment = process.env.NODE_ENV) {
+  return environment !== 'production' && String(identity || '').trim().toLowerCase() === 'admin'
+}
+
 export function getTaskDeadlineState(task) {
-  if (!task || !task.due_date || task.status === 'completed') {
+  if (!task || !task.due_date || task.due_date === '0000-00-00' || task.status === 'completed') {
     return { overdue: false, dueSoon: false, daysRemaining: null, label: 'Sem prazo' }
   }
 
-  const dueDate = new Date(`${task.due_date}T23:59:59`)
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
+  const dueParts = String(task.due_date).slice(0, 10).split('-').map(Number)
+  if (dueParts.length !== 3 || dueParts.some((part) => !Number.isInteger(part))) {
+    return { overdue: false, dueSoon: false, daysRemaining: null, label: 'Sem prazo' }
+  }
+  const [year, month, day] = dueParts
+  const dueDate = new Date(year, month - 1, day)
+  if (dueDate.getFullYear() !== year || dueDate.getMonth() !== month - 1 || dueDate.getDate() !== day) {
+    return { overdue: false, dueSoon: false, daysRemaining: null, label: 'Sem prazo' }
+  }
 
-  const diffDays = Math.ceil((dueDate.getTime() - today.getTime()) / 86400000)
+  const today = new Date()
+  const dueDay = Date.UTC(year, month - 1, day)
+  const todayDay = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())
+  const diffDays = Math.round((dueDay - todayDay) / 86400000)
   const overdue = diffDays < 0
   const dueSoon = diffDays >= 0 && diffDays <= 2
 
