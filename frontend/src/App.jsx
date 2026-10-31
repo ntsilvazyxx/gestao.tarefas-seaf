@@ -7,9 +7,10 @@ import {
   Check,
   CircleHelp,
   Clock3,
-  Download,
+  ExternalLink,
   FileText,
   LayoutDashboard,
+  Link2,
   ListTodo,
   LoaderCircle,
   LogOut,
@@ -18,7 +19,6 @@ import {
   RotateCcw,
   Search,
   Send,
-  Settings,
   Sun,
   UsersRound,
   UserPlus,
@@ -160,6 +160,12 @@ function TaskCard({ task, now, openHistory, showMovement, completeTask }) {
       </div>
       <button className="kanban-task-title" onClick={() => openHistory(task)}>{task.title}</button>
       <p className="kanban-description">{task.description || task.category || task.department || 'Sem descrição adicional.'}</p>
+      {task.process_ref && (
+        <div className="card-process-ref" title={`Referência: ${task.process_ref}`}>
+          <Link2 size={12} />
+          <span>{task.process_ref}</span>
+        </div>
+      )}
       <div className="card-compact-meta">
         <span className="elapsed"><Clock3 size={13} />{task.status === 'completed' ? 'Concluída' : formatElapsed(trackingDate, now)}</span>
         <span className={`due-date${task.overdue ? ' overdue' : task.dueSoon ? ' due-soon' : ''}`}><CalendarDays size={13} />{task.due_date ? formatDate(task.due_date) : 'Sem prazo'}</span>
@@ -199,7 +205,6 @@ function App() {
   const [selectedMember, setSelectedMember] = useState(null)
   const [history, setHistory] = useState([])
   const [comments, setComments] = useState([])
-  const [attachments, setAttachments] = useState([])
   const [loading, setLoading] = useState(Boolean(token))
   const [now, setNow] = useState(initialClock)
   const [saving, setSaving] = useState(false)
@@ -379,7 +384,7 @@ function App() {
 
   const filteredTasks = useMemo(() => {
     const query = search.trim().toLocaleLowerCase('pt-BR')
-    return tasks.filter((task) => !query || [task.title, task.description, task.assignee_name, task.category]
+    return tasks.filter((task) => !query || [task.title, task.description, task.assignee_name, task.category, task.process_ref]
       .some((value) => value?.toLocaleLowerCase('pt-BR').includes(query)))
   }, [tasks, search])
 
@@ -396,6 +401,7 @@ function App() {
         getTaskCode(task.id),
         task.title,
         task.description,
+        task.process_ref,
         task.category,
         task.assignee_name,
       ].some((value) => String(value || '').toLocaleLowerCase('pt-BR').includes(query))
@@ -466,7 +472,6 @@ function App() {
     setModal('history')
     setHistory([])
     setComments([])
-    setAttachments([])
     try {
       if (LOCAL_MODE) {
         markLocalTaskOpened(task.id)
@@ -474,7 +479,6 @@ function App() {
         setSelectedTask(result.task)
         setHistory(result.history)
         setComments(result.comments)
-        setAttachments(result.attachments)
         setTasks(loadLocalData()[0])
         return
       }
@@ -484,7 +488,6 @@ function App() {
       setSelectedTask(result.task || task)
       setHistory(result.history || [])
       setComments(result.comments || [])
-      setAttachments(result.attachments || [])
     } catch (requestError) {
       setError(requestError.message)
     }
@@ -518,54 +521,6 @@ function App() {
     }
   }
 
-  async function submitAttachment(event) {
-    const file = event.target.files?.[0]
-    if (!file || !selectedTask) return
-
-    if (file.size > 5 * 1024 * 1024) {
-      setError('O anexo deve ter no máximo 5 MB.')
-      event.target.value = ''
-      return
-    }
-    const formData = new FormData()
-    formData.append('file', file)
-    setError('')
-    try {
-      if (LOCAL_MODE) throw new Error('O envio de anexos está disponível quando a API e o banco estiverem conectados.')
-      const response = await apiFetch(`/tasks/${selectedTask.id}/attachments`, {
-        method: 'POST',
-        body: formData,
-      })
-      const result = await response.json()
-      if (!response.ok) throw new Error(result.error || 'Não foi possível anexar o arquivo.')
-      setAttachments((current) => [...current, result])
-    } catch (requestError) {
-      setError(requestError.message)
-    }
-    event.target.value = ''
-  }
-
-  async function downloadAttachment(file) {
-    try {
-      if (LOCAL_MODE) throw new Error('O download de anexos está disponível quando a API e o banco estiverem conectados.')
-      const response = await apiFetch(`/tasks/${selectedTask.id}/attachments/${file.id}`)
-      if (!response.ok) {
-        const result = await response.json()
-        throw new Error(result.error || 'Não foi possível baixar o anexo.')
-      }
-      const objectUrl = URL.createObjectURL(await response.blob())
-      const link = document.createElement('a')
-      link.href = objectUrl
-      link.download = file.filename
-      document.body.append(link)
-      link.click()
-      link.remove()
-      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
-    } catch (requestError) {
-      setError(requestError.message)
-    }
-  }
-
   async function submitTask(event) {
     event.preventDefault()
     setSaving(true)
@@ -574,6 +529,7 @@ function App() {
     const payload = {
       title: form.get('title'),
       description: form.get('description'),
+      process_ref: form.get('process_ref') || '',
       category: form.get('category'),
       priority: form.get('priority'),
       due_date: form.get('due_date') || null,
@@ -711,8 +667,6 @@ function App() {
         </nav>
         <div className="sidebar-bottom">
           <ThemeButton theme={theme} toggleTheme={toggleTheme} />
-          <button className="nav-item"><Settings size={18} /> Configurações</button>
-          <button className="nav-item"><CircleHelp size={18} /> Central de ajuda</button>
           <div className="profile-card"><span className="avatar avatar-indigo">{getInitials(user?.name || 'Admin')}</span><span className="profile-copy"><strong>{user?.name || 'Administrador'}</strong><small>{user?.email}</small></span><button className="row-action logout-button" onClick={logout} title="Sair" aria-label="Sair"><LogOut size={15} /></button></div>
         </div>
       </aside>
@@ -817,6 +771,7 @@ function App() {
           </form>}
           {modal === 'create' && <form onSubmit={submitTask} className="modal-form">
             <label>Título da tarefa<input name="title" placeholder="Ex.: Revisar contrato do cliente" required maxLength="180" /></label><label>Descrição<textarea name="description" placeholder="Adicione detalhes importantes para a equipe" rows="3" /></label>
+            <label>Número ou link do processo / referência <span className="optional-label">(opcional)</span><input name="process_ref" placeholder="Ex.: Processo SEI nº 12345/2026 ou link do documento externo" maxLength="255" /></label>
             <div className="form-row"><label>Categoria<select name="category" defaultValue=""><option value="">Selecione uma categoria</option><option value="Administrativo">Administrativo</option><option value="Análise e parecer">Análise e parecer</option><option value="Atendimento">Atendimento</option><option value="Compras e contratos">Compras e contratos</option><option value="Documentação">Documentação</option><option value="Financeiro">Financeiro</option><option value="Gestão de pessoas">Gestão de pessoas</option><option value="Planejamento">Planejamento</option><option value="Relatórios">Relatórios</option><option value="Tecnologia da Informação">Tecnologia da Informação</option><option value="Outra">Outra</option></select></label><label>Prioridade<select name="priority" defaultValue="medium"><option value="low">Baixa</option><option value="medium">Média</option><option value="high">Alta</option></select></label></div>
             <div className="form-row"><label>Prazo<input name="due_date" type="date" /></label><label>Responsável inicial<select name="assignee_id" defaultValue=""><option value="">Deixar na fila</option>{members.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}</select></label></div>
             <div className="modal-actions"><button type="button" className="button button-secondary" onClick={() => setModal(null)}>Cancelar</button><button className="button button-primary" disabled={saving}>{saving ? <LoaderCircle className="spinner" size={16} /> : <Plus size={16} />} Criar tarefa</button></div>
@@ -828,29 +783,46 @@ function App() {
             <div className="modal-actions"><button type="button" className="button button-secondary" onClick={() => setModal(null)}>Cancelar</button><button className="button button-primary" disabled={saving}>{saving ? <LoaderCircle className="spinner" size={16} /> : modal === 'return' ? <ArrowDownLeft size={16} /> : <Send size={15} />}{modal === 'return' ? 'Devolver para fila' : 'Encaminhar tarefa'}</button></div>
           </form>}
           {modal === 'history' && <div className="history-content">
-            <div className="history-task-summary"><span className="modal-kicker">TAREFA · {getTaskCode(selectedTask?.id)}</span><h3>{selectedTask?.title}</h3><p>{selectedTask?.description || selectedTask?.category || 'Sem descrição adicional.'}</p>{LOCAL_MODE && <p className="open-receipt">{selectedTask?.opened_at ? `Detalhes acessados em ${new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(selectedTask.opened_at))}. O registro não identifica quem abriu.` : 'Detalhes ainda não acessados.'}</p>}<div className="history-summary-meta"><span className={`priority priority-${selectedTask?.priority}`}>{priorities[selectedTask?.priority] || 'Média'} prioridade</span><span><Clock3 size={14} /> {selectedTask?.status === 'completed' ? 'Tarefa concluída' : formatElapsed(selectedTask?.current_since, now)}{selectedTask?.status !== 'completed' && ' nesta etapa'}</span>{selectedTask?.due_date && <span className={getDeadlineState(selectedTask).overdue ? 'deadline overdue' : getDeadlineState(selectedTask).dueSoon ? 'deadline due-soon' : 'deadline'}>{getDeadlineState(selectedTask).label}</span>}</div></div>
+            <div className="history-task-summary">
+              <span className="modal-kicker">TAREFA · {getTaskCode(selectedTask?.id)}</span>
+              <h3>{selectedTask?.title}</h3>
+              <p>{selectedTask?.description || selectedTask?.category || 'Sem descrição adicional.'}</p>
+              {selectedTask?.process_ref && (
+                <div className="task-reference-badge">
+                  <Link2 size={13} />
+                  <span>Referência / Processo:</span>
+                  {selectedTask.process_ref.startsWith('http://') || selectedTask.process_ref.startsWith('https://') ? (
+                    <a href={selectedTask.process_ref} target="_blank" rel="noopener noreferrer" className="reference-link">
+                      {selectedTask.process_ref} <ExternalLink size={12} />
+                    </a>
+                  ) : (
+                    <strong>{selectedTask.process_ref}</strong>
+                  )}
+                </div>
+              )}
+              {LOCAL_MODE && <p className="open-receipt">{selectedTask?.opened_at ? `Detalhes acessados em ${new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(selectedTask.opened_at))}. O registro não identifica quem abriu.` : 'Detalhes ainda não acessados.'}</p>}
+              <div className="history-summary-meta">
+                <span className={`priority priority-${selectedTask?.priority}`}>{priorities[selectedTask?.priority] || 'Média'} prioridade</span>
+                <span><Clock3 size={14} /> {selectedTask?.status === 'completed' ? 'Tarefa concluída' : formatElapsed(selectedTask?.current_since, now)}{selectedTask?.status !== 'completed' && ' nesta etapa'}</span>
+                {selectedTask?.due_date && <span className={getDeadlineState(selectedTask).overdue ? 'deadline overdue' : getDeadlineState(selectedTask).dueSoon ? 'deadline due-soon' : 'deadline'}>{getDeadlineState(selectedTask).label}</span>}
+              </div>
+            </div>
             <h3 className="timeline-heading">Movimentações <span>{history.length}</span></h3>
             {history.length === 0 ? <p className="empty-history">Nenhuma movimentação registrada.</p> : <ol className="timeline">{history.map((item) => <li key={item.id} className="timeline-item"><span className={`timeline-marker ${item.action}`} /><div className="timeline-entry"><strong>{item.action === 'created' ? 'Tarefa criada' : item.action === 'forwarded' ? 'Tarefa encaminhada' : item.action === 'returned' ? 'Tarefa devolvida' : item.action === 'reopened' ? 'Tarefa reaberta' : 'Tarefa concluída'}</strong><p>{item.action === 'created' ? `Criada${item.to_member_name ? ` e atribuída a ${item.to_member_name}` : ' na fila'}` : item.action === 'forwarded' ? `${item.from_member_name || 'Fila'} → ${item.to_member_name}` : item.action === 'returned' ? `${item.from_member_name || 'Responsável'} → Fila de tarefas` : item.action === 'reopened' ? `Administrador → ${item.to_member_name || 'responsável anterior'}` : `Concluída por ${item.from_member_name || 'responsável'}`}</p>{item.note && <blockquote>{item.note}</blockquote>}<small>{new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(item.created_at))}{item.duration_minutes != null && ` · permaneceu ${formatDuration(item.duration_minutes)}`}</small></div></li>)}</ol>}
 
             <div className="detail-section">
-              <h3 className="timeline-heading">Comentários <span>{comments.length}</span></h3>
+              <h3 className="timeline-heading">Comentários e notas <span>{comments.length}</span></h3>
               <form className="comment-form" onSubmit={submitComment}>
-                <textarea name="message" rows="2" placeholder="Adicionar comentário sobre a tarefa..." required maxLength="2000" />
-                <button type="submit" className="button button-primary">Comentar</button>
+                <textarea name="message" rows="3" placeholder="Adicionar comentário, nota ou link do processo..." required maxLength="2000" />
+                <div className="comment-form-bar">
+                  <span className="comment-hint"><Link2 size={13} /> Para processos, informe o protocolo (ex.: SEI) ou cole o link externo.</span>
+                  <button type="submit" className="button button-primary">Comentar</button>
+                </div>
               </form>
               {comments.length === 0 ? <p className="empty-history">Nenhum comentário registrado.</p> : <ul className="comment-list">{comments.map((comment) => <li key={comment.id}><strong>{comment.member_name || 'Usuário'}</strong><p>{comment.message}</p><small>{new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(comment.created_at))}</small></li>)}</ul>}
             </div>
 
-            <div className="detail-section">
-              <h3 className="timeline-heading">Anexos <span>{attachments.length}</span></h3>
-              <label className="upload-field">
-                <input type="file" onChange={submitAttachment} />
-                <span>Selecionar arquivo</span>
-              </label>
-              {attachments.length === 0 ? <p className="empty-history">Nenhum anexo enviado.</p> : <ul className="attachment-list">{attachments.map((file) => <li key={file.id}><span className="attachment-name">{file.filename}<small>{file.size_bytes ? `${Math.max(1, Math.round(file.size_bytes / 1024))} KB` : 'Arquivo'} · {file.member_name || 'Usuário'}</small></span><button type="button" className="row-action" aria-label={`Baixar ${file.filename}`} title={`Baixar ${file.filename}`} onClick={() => downloadAttachment(file)}><Download size={15} /></button></li>)}</ul>}
-            </div>
-
-            <div className="modal-actions"><button className="button button-secondary" onClick={() => setModal(null)}>Fechar</button>{selectedTask?.status === 'completed' && user?.is_admin && <button className="button button-primary" onClick={() => reopenTask(selectedTask)}><RotateCcw size={15} /> Reabrir processo</button>}{selectedTask?.status !== 'completed' && (selectedTask?.assignee_id ? <button className="button button-primary" onClick={() => showMovement(selectedTask, 'return')}><ArrowDownLeft size={16} /> Devolver tarefa</button> : <button className="button button-primary" onClick={() => showMovement(selectedTask, 'forward')}><Send size={15} /> Encaminhar tarefa</button>)}</div>
+            <div className="modal-actions"><button className="button button-secondary" onClick={() => setModal(null)}>Fechar</button>{selectedTask?.status === 'completed' && user?.is_admin && <button className="button button-primary" onClick={() => reopenTask(selectedTask)}><RotateCcw size={15} /> Reabrir tarefa</button>}{selectedTask?.status !== 'completed' && (selectedTask?.assignee_id ? <button className="button button-primary" onClick={() => showMovement(selectedTask, 'return')}><ArrowDownLeft size={16} /> Devolver tarefa</button> : <button className="button button-primary" onClick={() => showMovement(selectedTask, 'forward')}><Send size={15} /> Encaminhar tarefa</button>)}</div>
           </div>}
         </section>
       </div>}
