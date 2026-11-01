@@ -7,10 +7,8 @@ import {
   Check,
   CircleHelp,
   Clock3,
-  ExternalLink,
   FileText,
   LayoutDashboard,
-  Link2,
   ListTodo,
   LoaderCircle,
   LogOut,
@@ -160,12 +158,6 @@ function TaskCard({ task, now, openHistory, showMovement, completeTask }) {
       </div>
       <button className="kanban-task-title" onClick={() => openHistory(task)}>{task.title}</button>
       <p className="kanban-description">{task.description || task.category || task.department || 'Sem descrição adicional.'}</p>
-      {task.process_ref && (
-        <div className="card-process-ref" title={`Referência: ${task.process_ref}`}>
-          <Link2 size={12} />
-          <span>{task.process_ref}</span>
-        </div>
-      )}
       <div className="card-compact-meta">
         <span className="elapsed"><Clock3 size={13} />{task.status === 'completed' ? 'Concluída' : formatElapsed(trackingDate, now)}</span>
         <span className={`due-date${task.overdue ? ' overdue' : task.dueSoon ? ' due-soon' : ''}`}><CalendarDays size={13} />{task.due_date ? formatDate(task.due_date) : 'Sem prazo'}</span>
@@ -384,7 +376,7 @@ function App() {
 
   const filteredTasks = useMemo(() => {
     const query = search.trim().toLocaleLowerCase('pt-BR')
-    return tasks.filter((task) => !query || [task.title, task.description, task.assignee_name, task.category, task.process_ref]
+    return tasks.filter((task) => !query || [task.title, task.description, task.assignee_name, task.category]
       .some((value) => value?.toLocaleLowerCase('pt-BR').includes(query)))
   }, [tasks, search])
 
@@ -401,7 +393,6 @@ function App() {
         getTaskCode(task.id),
         task.title,
         task.description,
-        task.process_ref,
         task.category,
         task.assignee_name,
       ].some((value) => String(value || '').toLocaleLowerCase('pt-BR').includes(query))
@@ -529,7 +520,6 @@ function App() {
     const payload = {
       title: form.get('title'),
       description: form.get('description'),
-      process_ref: form.get('process_ref') || '',
       category: form.get('category'),
       priority: form.get('priority'),
       due_date: form.get('due_date') || null,
@@ -771,7 +761,6 @@ function App() {
           </form>}
           {modal === 'create' && <form onSubmit={submitTask} className="modal-form">
             <label>Título da tarefa<input name="title" placeholder="Ex.: Revisar contrato do cliente" required maxLength="180" /></label><label>Descrição<textarea name="description" placeholder="Adicione detalhes importantes para a equipe" rows="3" /></label>
-            <label>Número ou link do processo / referência <span className="optional-label">(opcional)</span><input name="process_ref" placeholder="Ex.: Processo SEI nº 12345/2026 ou link do documento externo" maxLength="255" /></label>
             <div className="form-row"><label>Categoria<select name="category" defaultValue=""><option value="">Selecione uma categoria</option><option value="Administrativo">Administrativo</option><option value="Análise e parecer">Análise e parecer</option><option value="Atendimento">Atendimento</option><option value="Compras e contratos">Compras e contratos</option><option value="Documentação">Documentação</option><option value="Financeiro">Financeiro</option><option value="Gestão de pessoas">Gestão de pessoas</option><option value="Planejamento">Planejamento</option><option value="Relatórios">Relatórios</option><option value="Tecnologia da Informação">Tecnologia da Informação</option><option value="Outra">Outra</option></select></label><label>Prioridade<select name="priority" defaultValue="medium"><option value="low">Baixa</option><option value="medium">Média</option><option value="high">Alta</option></select></label></div>
             <div className="form-row"><label>Prazo<input name="due_date" type="date" /></label><label>Responsável inicial<select name="assignee_id" defaultValue=""><option value="">Deixar na fila</option>{members.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}</select></label></div>
             <div className="modal-actions"><button type="button" className="button button-secondary" onClick={() => setModal(null)}>Cancelar</button><button className="button button-primary" disabled={saving}>{saving ? <LoaderCircle className="spinner" size={16} /> : <Plus size={16} />} Criar tarefa</button></div>
@@ -787,19 +776,6 @@ function App() {
               <span className="modal-kicker">TAREFA · {getTaskCode(selectedTask?.id)}</span>
               <h3>{selectedTask?.title}</h3>
               <p>{selectedTask?.description || selectedTask?.category || 'Sem descrição adicional.'}</p>
-              {selectedTask?.process_ref && (
-                <div className="task-reference-badge">
-                  <Link2 size={13} />
-                  <span>Referência / Processo:</span>
-                  {selectedTask.process_ref.startsWith('http://') || selectedTask.process_ref.startsWith('https://') ? (
-                    <a href={selectedTask.process_ref} target="_blank" rel="noopener noreferrer" className="reference-link">
-                      {selectedTask.process_ref} <ExternalLink size={12} />
-                    </a>
-                  ) : (
-                    <strong>{selectedTask.process_ref}</strong>
-                  )}
-                </div>
-              )}
               {LOCAL_MODE && <p className="open-receipt">{selectedTask?.opened_at ? `Detalhes acessados em ${new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(selectedTask.opened_at))}. O registro não identifica quem abriu.` : 'Detalhes ainda não acessados.'}</p>}
               <div className="history-summary-meta">
                 <span className={`priority priority-${selectedTask?.priority}`}>{priorities[selectedTask?.priority] || 'Média'} prioridade</span>
@@ -813,9 +789,8 @@ function App() {
             <div className="detail-section">
               <h3 className="timeline-heading">Comentários e notas <span>{comments.length}</span></h3>
               <form className="comment-form" onSubmit={submitComment}>
-                <textarea name="message" rows="3" placeholder="Adicionar comentário, nota ou link do processo..." required maxLength="2000" />
+                <textarea name="message" rows="3" placeholder="Adicionar um comentário ou nota..." required maxLength="2000" />
                 <div className="comment-form-bar">
-                  <span className="comment-hint"><Link2 size={13} /> Para processos, informe o protocolo (ex.: SEI) ou cole o link externo.</span>
                   <button type="submit" className="button button-primary">Comentar</button>
                 </div>
               </form>

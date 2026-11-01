@@ -84,6 +84,9 @@ function parseAttachmentUpload(request, response, next) {
 }
 
 app.get('/api/health', async (_request, response, next) => {
+  if (process.env.SKIP_DB_CHECK === 'true') {
+    return response.json({ status: 'ok', database: 'skipped (local mode)' })
+  }
   try {
     await pool.query('SELECT 1')
     response.json({ status: 'ok', database: 'connected' })
@@ -807,12 +810,19 @@ async function fetchTaskAttachments(taskId) {
 }
 
 app.use((error, _request, response, _next) => {
+  if (process.env.SKIP_DB_CHECK === 'true' && error && (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND')) {
+    return response.status(503).json({ error: 'MySQL desativado para testes locais.' })
+  }
   console.error('Erro na API:', error)
   response.status(500).json({ error: 'Ocorreu um erro interno. Consulte os logs da API.' })
 })
 
 app.listen(port, async () => {
   console.log(`API disponível em http://localhost:${port}`)
+  if (process.env.SKIP_DB_CHECK === 'true') {
+    console.log('Consultas de teste ao MySQL desativadas (modo de testes locais).')
+    return
+  }
   try {
     await pool.query('SELECT 1')
     console.log('Conexão com MySQL estabelecida.')

@@ -138,7 +138,6 @@ export function createLocalTask(payload) {
     id: data.nextTaskId,
     title: String(payload.title || '').trim(),
     description: String(payload.description || '').trim(),
-    process_ref: String(payload.process_ref || '').trim() || null,
     category: String(payload.category || '').trim(),
     priority: payload.priority || 'medium',
     status: member ? 'in_progress' : 'pending',
