@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDownLeft,
   ArrowRight,
   Bell,
   CalendarDays,
   Check,
+  ChevronLeft,
+  ChevronRight,
   CircleHelp,
   Clock3,
   Download,
@@ -46,8 +48,8 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api'
 const LOCAL_MODE = import.meta.env.VITE_LOCAL_MODE === 'true'
 const initialClock = Date.now()
 const columns = [
-  { status: 'pending', title: 'Na fila', caption: 'Aguardando encaminhamento', icon: Clock3 },
-  { status: 'in_progress', title: 'Em andamento', caption: 'Com a equipe', icon: UsersRound },
+  { status: 'pending', title: 'Na fila', caption: 'Aguardando encaminhamento', icon: Clock3, pillClass: 'pill-rose' },
+  { status: 'in_progress', title: 'Em andamento', caption: 'Com a equipe', icon: UsersRound, pillClass: 'pill-sky' },
 ]
 const priorities = { high: 'Alta', medium: 'Média', low: 'Baixa' }
 const statusLabels = { pending: 'Na fila', in_progress: 'Em andamento', completed: 'Concluída' }
@@ -141,42 +143,76 @@ function LoginScreen({ onLogin, busy, error, theme, toggleTheme }) {
   )
 }
 
-function TaskCard({ task, now, openHistory, showMovement, completeTask }) {
+function TaskCard({ task, openHistory, showMovement, completeTask }) {
   const [dragging, setDragging] = useState(false)
-  const trackingDate = task.current_since || task.created_at
+  const isOverdue = task.overdue
+  const isDueSoon = task.dueSoon && !task.overdue
+
   return (
     <article
-      className={`kanban-card${dragging ? ' dragging' : ''}${task.overdue ? ' task-overdue' : ''}`}
+      className={`kanban-card${dragging ? ' dragging' : ''}${isOverdue ? ' task-overdue' : ''}`}
       draggable
-      onDragStart={(event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', String(task.id)); setDragging(true) }}
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = 'move'
+        event.dataTransfer.setData('text/plain', String(task.id))
+        setDragging(true)
+      }}
       onDragEnd={() => setDragging(false)}
+      onClick={() => openHistory(task)}
     >
       <div className="card-topline">
-        <div className="card-identifiers">
-          <span className="task-code">{getTaskCode(task.id)}</span>
-          <span className={`priority priority-${task.priority}`}>{priorities[task.priority] || 'Média'}</span>
+        <span className="card-code">{getTaskCode(task.id)}</span>
+        <span className={`priority-indicator priority-${task.priority}`} title={`Prioridade: ${priorities[task.priority] || 'Média'}`} />
+      </div>
+
+      <h3 className="kanban-task-title">{task.title}</h3>
+
+      {task.category && (
+        <div className="card-tag-wrapper">
+          <span className="card-category-tag">{task.category}</span>
         </div>
-        <span className={`status-pill status-${task.status}`}>{statusLabels[task.status] || task.status}</span>
+      )}
+
+      <div className="card-footer">
+        <div className="card-assignee">
+          {task.assignee_name ? (
+            <span
+              className={`avatar avatar-xs ${Number(task.assignee_id) % 2 ? 'avatar-indigo' : 'avatar-teal'}`}
+              title={`Responsável: ${task.assignee_name} (${task.department || 'Equipe'})`}
+            >
+              {getInitials(task.assignee_name)}
+            </span>
+          ) : (
+            <span className="unassigned-avatar" title="Aguardando encaminhamento">
+              <span className="unassigned-dot" />
+            </span>
+          )}
+          {task.assignee_name && <span className="card-assignee-name">{task.assignee_name.split(' ')[0]}</span>}
+        </div>
+
+        {task.due_date && (
+          <span className={`card-date${isOverdue ? ' date-overdue' : isDueSoon ? ' date-due-soon' : ''}`}>
+            {formatDate(task.due_date)}
+          </span>
+        )}
       </div>
-      <button className="kanban-task-title" onClick={() => openHistory(task)}>{task.title}</button>
-      <p className="kanban-description">{task.description || task.category || task.department || 'Sem descrição adicional.'}</p>
-      <div className="card-compact-meta">
-        <span className="elapsed"><Clock3 size={13} />{task.status === 'completed' ? 'Concluída' : formatElapsed(trackingDate, now)}</span>
-        <span className={`due-date${task.overdue ? ' overdue' : task.dueSoon ? ' due-soon' : ''}`}><CalendarDays size={13} />{task.due_date ? formatDate(task.due_date) : 'Sem prazo'}</span>
-      </div>
-      <div className="kanban-card-assignee">
-        {task.assignee_name
-          ? <span className="person-cell"><span className={`avatar ${Number(task.assignee_id) % 2 ? 'avatar-indigo' : 'avatar-teal'}`}>{getInitials(task.assignee_name)}</span><span>{task.assignee_name}<small>{task.department || 'Equipe'}</small></span></span>
-          : <span className="unassigned"><span />Aguardando encaminhamento</span>}
-      </div>
-      {LOCAL_MODE && <div className={`task-open-state${task.opened_at ? ' opened' : ''}`}>{task.opened_at ? `Detalhes acessados · ${new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(task.opened_at))}` : 'Detalhes ainda não acessados'}</div>}
-      <div className="card-actions">
-        <button className="card-action-button card-history" onClick={() => openHistory(task)} aria-label={`Ver histórico de ${task.title}`} title="Ver histórico"><FileText size={14} /><span>Histórico</span></button>
-        {task.status === 'pending' && <button className="card-action-button card-forward" onClick={() => showMovement(task, 'forward')}><Send size={13} /><span>Encaminhar</span></button>}
-        {task.status === 'in_progress' && <>
-          <button className="card-action-button" onClick={() => showMovement(task, 'return')}><ArrowDownLeft size={14} /><span>Devolver</span></button>
-          <button className="card-action-button card-complete" onClick={() => completeTask(task)}><Check size={14} /><span>Concluir</span></button>
-        </>}
+
+      <div className="card-hover-actions" onClick={(e) => e.stopPropagation()}>
+        {task.status === 'pending' && (
+          <button className="card-mini-btn" title="Encaminhar" onClick={() => showMovement(task, 'forward')}>
+            <Send size={12} />
+          </button>
+        )}
+        {task.status === 'in_progress' && (
+          <>
+            <button className="card-mini-btn" title="Devolver para a fila" onClick={() => showMovement(task, 'return')}>
+              <ArrowDownLeft size={12} />
+            </button>
+            <button className="card-mini-btn complete" title="Concluir" onClick={() => completeTask(task)}>
+              <Check size={12} />
+            </button>
+          </>
+        )}
       </div>
     </article>
   )
@@ -207,6 +243,13 @@ function App() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [theme, setTheme] = useState(() => localStorage.getItem('fluxo.theme') || 'light')
+  const boardRef = useRef(null)
+
+  function scrollBoard(direction) {
+    if (!boardRef.current) return
+    const scrollAmount = boardRef.current.clientWidth * 0.8
+    boardRef.current.scrollBy({ left: direction * scrollAmount, behavior: 'smooth' })
+  }
 
   function toggleTheme() {
     setTheme((current) => {
@@ -761,12 +804,88 @@ function App() {
               <article className="stat-card"><div className="stat-top"><span className="stat-icon icon-green"><Check size={18} /></span><span className="stat-period">Total concluídas</span></div><strong className="stat-value">{counts.completed}</strong><span className="stat-label">Concluídas</span><div className="stat-foot"><span className="stat-foot-dot dot-green" /> Finalizadas pela equipe</div></article>
             </section>
             <section className="kanban-section">
-              <div className="kanban-toolbar"><div><h2>Quadro da equipe</h2><p>Arraste uma tarefa para outra etapa ou use as ações do cartão.</p></div><label className="search-field"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar tarefa..." /></label></div>
-              {loading ? <div className="board-loading"><LoaderCircle className="spinner" size={20} /> Carregando tarefas...</div> : <div className="kanban-board">{columns.map((column) => {
-                const ColumnIcon = column.icon
-                const columnTasks = filteredTasks.filter((task) => task.status === column.status)
-                return <section className={`kanban-column column-${column.status}`} key={column.status} onDragOver={(event) => event.preventDefault()} onDrop={(event) => handleDrop(event, column.status)}><header className="kanban-column-heading"><span className="column-icon"><ColumnIcon size={16} /></span><span className="column-title">{column.title}<small>{column.caption}</small></span><span className="column-count">{columnTasks.length}</span></header><div className="kanban-cards">{columnTasks.map((task) => <TaskCard key={task.id} task={task} now={now} openHistory={openHistory} showMovement={showMovement} completeTask={completeTask} />)}{!columnTasks.length && <p className="column-empty">{search ? 'Nenhuma tarefa corresponde à busca.' : 'Nenhuma tarefa nesta etapa.'}</p>}</div></section>
-              })}</div>}
+              <div className="kanban-toolbar">
+                <div>
+                  <h2>Quadro da equipe</h2>
+                  <p>Arraste uma tarefa para outra etapa ou use as ações do cartão.</p>
+                </div>
+                <label className="search-field">
+                  <Search size={16} />
+                  <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar tarefa..." />
+                </label>
+              </div>
+              {loading ? (
+                <div className="board-loading"><LoaderCircle className="spinner" size={20} /> Carregando tarefas...</div>
+              ) : (
+                <div className="kanban-board-container">
+                  <button
+                    type="button"
+                    className="board-nav-btn nav-btn-left"
+                    onClick={() => scrollBoard(-1)}
+                    aria-label="Rolar para coluna anterior"
+                    title="Coluna anterior"
+                  >
+                    <ChevronLeft size={20} />
+                  </button>
+
+                  <div className="kanban-board" ref={boardRef}>
+                    {columns.map((column) => {
+                      const columnTasks = filteredTasks.filter((task) => task.status === column.status)
+                      return (
+                        <section
+                          className={`kanban-column column-${column.status}`}
+                          key={column.status}
+                          onDragOver={(event) => event.preventDefault()}
+                          onDrop={(event) => handleDrop(event, column.status)}
+                        >
+                          <header className={`column-pill-header ${column.pillClass}`}>
+                            <div className="column-pill-info">
+                              <span className="column-status-dot" />
+                              <span className="column-status-title">{column.title}</span>
+                              <span className="column-status-count">{columnTasks.length}</span>
+                            </div>
+                            <button
+                              type="button"
+                              className="column-quick-add"
+                              title={`Adicionar tarefa em ${column.title}`}
+                              aria-label={`Adicionar tarefa em ${column.title}`}
+                              onClick={() => { setError(''); setModal('create') }}
+                            >
+                              <Plus size={15} strokeWidth={2.5} />
+                            </button>
+                          </header>
+                          <div className="kanban-cards">
+                            {columnTasks.map((task) => (
+                              <TaskCard
+                                key={task.id}
+                                task={task}
+                                openHistory={openHistory}
+                                showMovement={showMovement}
+                                completeTask={completeTask}
+                              />
+                            ))}
+                            {!columnTasks.length && (
+                              <p className="column-empty">
+                                {search ? 'Nenhuma tarefa corresponde à busca.' : 'Nenhuma tarefa nesta etapa.'}
+                              </p>
+                            )}
+                          </div>
+                        </section>
+                      )
+                    })}
+                  </div>
+
+                  <button
+                    type="button"
+                    className="board-nav-btn nav-btn-right"
+                    onClick={() => scrollBoard(1)}
+                    aria-label="Rolar para próxima coluna"
+                    title="Próxima coluna"
+                  >
+                    <ChevronRight size={20} />
+                  </button>
+                </div>
+              )}
             </section>
           </> : <section className="tasks-panel consultation-panel">
             <div className="panel-heading"><div><h2>Consulta de tarefas</h2><p>Busque pelo código ou texto e filtre pela etapa.</p></div><span className="consultation-count">{consultationTasks.length} tarefas</span></div>
@@ -795,12 +914,11 @@ function App() {
         </div>
       </main>
 
-      <nav className={`mobile-nav${activePage === 'consultation' ? ' consultation-nav' : ''}${activePage === 'profiles' ? ' profiles-nav' : ''}${user?.is_admin ? ' admin-nav' : ''}`} aria-label="Navegação mobile">
+      <nav className="mobile-nav" aria-label="Navegação mobile">
         <button className={activePage === 'board' ? 'mobile-nav-item active' : 'mobile-nav-item'} onClick={() => setActivePage('board')}><LayoutDashboard size={19} /><span>Kanban</span></button>
         <button className={activePage === 'consultation' ? 'mobile-nav-item active' : 'mobile-nav-item'} onClick={() => setActivePage('consultation')}><FileText size={19} /><span>Consulta</span></button>
         {user?.is_admin && <button className={activePage === 'profiles' ? 'mobile-nav-item active' : 'mobile-nav-item'} onClick={openProfiles}><UsersRound size={19} /><span>Perfis</span></button>}
         {activePage === 'board' && <button className="mobile-nav-item" onClick={() => { setError(''); setModal('create') }}><Plus size={20} /><span>Nova tarefa</span></button>}
-        <button className="mobile-nav-item" onClick={toggleTheme}>{theme === 'dark' ? <Sun size={19} /> : <Moon size={19} />}<span>Tema</span></button>
         <button className="mobile-nav-item" onClick={logout}><LogOut size={19} /><span>Sair</span></button>
       </nav>
 
