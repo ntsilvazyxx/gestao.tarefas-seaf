@@ -530,15 +530,15 @@ body { color: var(--text-primary); background: var(--page-background); }
     display: flex;
     overflow-x: auto;
     min-height: 0;
-    gap: 12px;
-    padding: 12px 14px;
+    gap: 14px;
+    padding: 12px 14px 12px 14px;
     scroll-snap-type: x mandatory;
     scroll-behavior: smooth;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
   }
   .kanban-board::-webkit-scrollbar { display: none; }
-  .kanban-column { flex: 0 0 min(86vw, 360px); min-height: 260px; scroll-snap-align: center; }
+  .kanban-column { flex: 0 0 calc(100vw - 28px); min-height: 260px; scroll-snap-align: center; }
   .kanban-cards { min-height: 190px; }
   .kanban-card { padding: 11px; cursor: default; }
   .card-action-button { min-height: 36px; padding: 0 9px; font-size: 9px; }
@@ -732,23 +732,6 @@ body { color: var(--text-primary); background: var(--page-background); }
   margin-left: 2px;
 }
 
-.column-quick-add {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  opacity: 0.75;
-  transition: opacity 0.15s, background 0.15s;
-}
-
-.column-quick-add:hover {
-  opacity: 1;
-  background: rgba(0, 0, 0, 0.06);
-}
 
 /* Cores das Pílulas das Colunas */
 .pill-rose {
@@ -759,9 +742,6 @@ body { color: var(--text-primary); background: var(--page-background); }
   background: #ef4444;
   box-shadow: 0 0 0 2px #fecaca;
 }
-.pill-rose .column-quick-add {
-  color: #b91c1c;
-}
 
 .pill-sky {
   background: #e0f2fe;
@@ -771,9 +751,6 @@ body { color: var(--text-primary); background: var(--page-background); }
   background: #0ea5e9;
   box-shadow: 0 0 0 2px #bae6fd;
 }
-.pill-sky .column-quick-add {
-  color: #0369a1;
-}
 
 .pill-emerald {
   background: #dcfce7;
@@ -782,9 +759,6 @@ body { color: var(--text-primary); background: var(--page-background); }
 .pill-emerald .column-status-dot {
   background: #22c55e;
   box-shadow: 0 0 0 2px #bbf7d0;
-}
-.pill-emerald .column-quick-add {
-  color: #15803d;
 }
 
 /* Área de Cartões */
@@ -1043,9 +1017,6 @@ body { color: var(--text-primary); background: var(--page-background); }
   background: #ef4444;
   box-shadow: 0 0 0 2px #7f1d1d;
 }
-[data-theme="dark"] .pill-rose .column-quick-add {
-  color: #fca5a5;
-}
 
 [data-theme="dark"] .pill-sky {
   background: #082f49;
@@ -1055,9 +1026,6 @@ body { color: var(--text-primary); background: var(--page-background); }
   background: #0ea5e9;
   box-shadow: 0 0 0 2px #0369a1;
 }
-[data-theme="dark"] .pill-sky .column-quick-add {
-  color: #7dd3fc;
-}
 
 [data-theme="dark"] .pill-emerald {
   background: #064e3b;
@@ -1066,9 +1034,6 @@ body { color: var(--text-primary); background: var(--page-background); }
 [data-theme="dark"] .pill-emerald .column-status-dot {
   background: #10b981;
   box-shadow: 0 0 0 2px #047857;
-}
-[data-theme="dark"] .pill-emerald .column-quick-add {
-  color: #6ee7b7;
 }
 
 [data-theme="dark"] .card-hover-actions {
