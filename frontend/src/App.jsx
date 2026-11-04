@@ -943,11 +943,11 @@ function App() {
 
             <div className="detail-section">
               <h3 className="timeline-heading">Comentários <span>{comments.length}</span></h3>
+              {comments.length === 0 ? <p className="empty-history">Nenhum comentário registrado.</p> : <ul className="comment-list">{comments.map((comment) => <li key={comment.id}><strong>{comment.member_name || 'Usuário'}</strong><p>{comment.message}</p><small>{new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(comment.created_at))}</small></li>)}</ul>}
               <form className="comment-form" onSubmit={submitComment}>
                 <textarea name="message" rows="2" placeholder="Adicionar comentário sobre a tarefa..." required maxLength="2000" />
                 <button type="submit" className="button button-primary">Comentar</button>
               </form>
-              {comments.length === 0 ? <p className="empty-history">Nenhum comentário registrado.</p> : <ul className="comment-list">{comments.map((comment) => <li key={comment.id}><strong>{comment.member_name || 'Usuário'}</strong><p>{comment.message}</p><small>{new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(comment.created_at))}</small></li>)}</ul>}
             </div>
 
             <div className="detail-section">
