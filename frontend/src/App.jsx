@@ -844,15 +844,6 @@ function App() {
                               <span className="column-status-title">{column.title}</span>
                               <span className="column-status-count">{columnTasks.length}</span>
                             </div>
-                            <button
-                              type="button"
-                              className="column-quick-add"
-                              title={`Adicionar tarefa em ${column.title}`}
-                              aria-label={`Adicionar tarefa em ${column.title}`}
-                              onClick={() => { setError(''); setModal('create') }}
-                            >
-                              <Plus size={15} strokeWidth={2.5} />
-                            </button>
                           </header>
                           <div className="kanban-cards">
                             {columnTasks.map((task) => (
