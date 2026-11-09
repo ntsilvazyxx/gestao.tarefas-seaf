@@ -27,6 +27,8 @@ O frontend abre na porta indicada pelo Vite (normalmente `http://localhost:5173`
 
 Para testar somente a interface sem conectar o MySQL, defina `VITE_LOCAL_MODE=true` em `frontend/.env.local` e reinicie o Vite. Nesse modo, tarefas, encaminhamentos, comentários, histórico e registros de acesso aos detalhes ficam salvos no armazenamento local do navegador; o registro de acesso não identifica a pessoa e anexos continuam exigindo a API e o banco. Esses dados não são compartilhados entre navegadores ou computadores.
 
+No modo local, a tela de login permite registrar contas de teste com nome, e-mail e senha. Os cadastros ficam somente no navegador atual; a senha é armazenada como hash e essas contas não são válidas na API nem em outros dispositivos.
+
 Em ambiente de desenvolvimento, entre com o usuário `admin` para exibir a aba **Gerenciar perfis**. O painel permite criar, editar, ativar e desativar perfis de teste. No modo local, as alterações ficam no navegador; com a API conectada, ficam no MySQL. O login temporário aceita qualquer senha não vazia, portanto esse acesso administrativo é exclusivamente para testes e fica desabilitado quando `NODE_ENV=production`. Perfis não possuem senha própria.
 
 ## API
@@ -39,7 +41,8 @@ Em ambiente de desenvolvimento, entre com o usuário `admin` para exibir a aba *
 - `PATCH /api/admin/members/:id` — atualizar ou ativar/desativar perfil (administrador de teste)
 - `GET /api/tasks` — tarefas e responsável atual
 - `POST /api/tasks` — criação de tarefa
-- `POST /api/tasks/:id/forward` — encaminhamento para outra pessoa
+- `PATCH /api/tasks/:id/status` — mudança entre Na fila, Pendente e Em andamento
+- `POST /api/tasks/:id/forward` — encaminha para outra pessoa e avança uma etapa no fluxo
 - `POST /api/tasks/:id/return` — devolução para a fila
 - `POST /api/tasks/:id/complete` — conclusão de tarefa em andamento
 - `POST /api/tasks/:id/reopen` — reabertura para o responsável anterior (administrador de teste)
@@ -54,6 +57,10 @@ O tempo atual é calculado a partir de `current_since`; cada encaminhamento, dev
 
 Prazos vencidos e com vencimento próximo são destacados no quadro, na consulta e nos detalhes da tarefa. Comentários e anexos registram o usuário autenticado, mesmo quando ele entrou com login genérico sem cadastro de membro. Para bancos existentes que já têm as tabelas `task_comments` e `task_attachments` da versão anterior, aplique uma vez `backend/migrations/20261029_task_collaboration.sql` no MySQL. Para bancos sem essas tabelas, execute `backend/schema.sql`, que cria a estrutura atualizada.
 
+Para habilitar a etapa **Pendente** em bancos existentes, aplique uma vez `backend/migrations/20261109_task_waiting_status.sql`. Para bancos novos, `backend/schema.sql` já inclui essa etapa.
+
 ## Identidade visual
+
+O Kanban segue as etapas **Na fila → Pendente → Em andamento**; tarefas novas sempre começam em **Na fila**. A tela **Processos finalizados** mostra somente tarefas concluídas.
 
 O sistema usa azul institucional, amarelo de destaque e verde para indicadores, com superfícies neutras nos temas claro e escuro. SF Pro é priorizada nos dispositivos Apple quando instalada; nos demais sistemas, a fonte Inter variável é incluída no frontend para manter a tipografia consistente sem depender de instalação local.

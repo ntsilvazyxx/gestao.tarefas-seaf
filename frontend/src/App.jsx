@@ -20,7 +20,6 @@ import {
   RotateCcw,
   Search,
   Send,
-  Settings,
   Sun,
   UsersRound,
   UserPlus,
@@ -31,6 +30,7 @@ import {
 } from 'lucide-react'
 import {
   addLocalComment,
+  authenticateLocalAccount,
   completeLocalTask,
   createLocalTask,
   createLocalMember,
@@ -40,7 +40,9 @@ import {
   markLocalTaskOpened,
   moveLocalTask,
   reopenLocalTask,
+  registerLocalAccount,
   setLocalMemberActive,
+  setLocalTaskStatus,
   updateLocalMember,
 } from './localStore.js'
 
@@ -48,11 +50,12 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api'
 const LOCAL_MODE = import.meta.env.VITE_LOCAL_MODE === 'true'
 const initialClock = Date.now()
 const columns = [
-  { status: 'pending', title: 'Na fila', caption: 'Aguardando encaminhamento', icon: Clock3, pillClass: 'pill-rose' },
-  { status: 'in_progress', title: 'Em andamento', caption: 'Com a equipe', icon: UsersRound, pillClass: 'pill-sky' },
+  { status: 'pending', title: 'Na fila', caption: 'Aguardando encaminhamento', icon: Clock3, pillClass: 'pill-violet' },
+  { status: 'waiting', title: 'Pendente', caption: 'Aguardando andamento', icon: Clock3, pillClass: 'pill-amber' },
+  { status: 'in_progress', title: 'Em andamento', caption: 'Com a equipe', icon: UsersRound, pillClass: 'pill-emerald' },
 ]
 const priorities = { high: 'Alta', medium: 'Média', low: 'Baixa' }
-const statusLabels = { pending: 'Na fila', in_progress: 'Em andamento', completed: 'Concluída' }
+const statusLabels = { pending: 'Na fila', waiting: 'Pendente', in_progress: 'Em andamento', completed: 'Concluída' }
 
 function getTaskCode(taskId) {
   return `TAR-${String(taskId).padStart(6, '0')}`
@@ -122,28 +125,44 @@ function ThemeButton({ theme, toggleTheme }) {
   )
 }
 
-function LoginScreen({ onLogin, busy, error, theme, toggleTheme }) {
+function LoginScreen({ onLogin, onRegister, busy, error, theme, toggleTheme }) {
+  const [activeTab, setActiveTab] = useState('login')
+
   return (
     <main className="login-screen" data-theme={theme}>
       <div className="login-top"><span className="login-top-spacer" aria-hidden="true" /><ThemeButton theme={theme} toggleTheme={toggleTheme} /></div>
       <section className="login-card">
-        <span className="login-brand-mark"><ListTodo size={30} strokeWidth={2.5} /></span>
+        <img className="login-logo" src="/seaf-logo-login.png" alt="SEAF — Secretaria de Estado de Agricultura Familiar e Governo de Mato Grosso" />
         <h1 className="login-title">Sistema de Gestão de Tarefas - Fluxo</h1>
-        <p className="login-subtitle">Entre para acompanhar e organizar as tarefas da equipe.</p>
+        <p className="login-subtitle">{activeTab === 'register' ? 'Crie uma conta de teste neste navegador.' : 'Entre para acompanhar e organizar as tarefas da equipe.'}</p>
         {error && <div className="alert alert-error" role="alert">{error}</div>}
-        <form className="modal-form login-form" onSubmit={onLogin}>
-          <label>Usuário ou e-mail<input type="text" name="email" placeholder="Digite qualquer usuário" autoComplete="username" required maxLength="180" /></label>
-          <label>Senha<input type="password" name="password" placeholder="Digite qualquer senha" autoComplete="current-password" required maxLength="256" /></label>
-          <div className="login-options"><a href="/recuperar-senha">Esqueceu a senha?</a></div>
-          <button className="button button-primary login-submit" disabled={busy}>{busy ? <LoaderCircle className="spinner" size={17} /> : null} Entrar</button>
-        </form>
-        <p className="login-help">{LOCAL_MODE ? 'Modo de teste local: os dados ficam salvos neste navegador.' : 'Acesso temporário: informe qualquer usuário e senha.'}</p>
+        {activeTab === 'register' ? (
+          <form className="modal-form login-form" onSubmit={onRegister}>
+            <label>Nome<input type="text" name="name" placeholder="Seu nome" autoComplete="name" required maxLength="120" /></label>
+            <label>E-mail<input type="email" name="email" placeholder="voce@exemplo.com" autoComplete="email" required maxLength="180" /></label>
+            <label>Senha<input type="password" name="password" placeholder="Mínimo de 8 caracteres" autoComplete="new-password" required minLength="8" maxLength="256" /></label>
+            <label>Confirmar senha<input type="password" name="confirmPassword" placeholder="Digite a senha novamente" autoComplete="new-password" required minLength="8" maxLength="256" /></label>
+            <div className="login-options login-options-register"><a href="#login" onClick={(event) => { event.preventDefault(); setActiveTab('login') }}>Já tem conta? Entrar</a></div>
+            <button className="button button-primary login-submit" disabled={busy}>{busy ? <LoaderCircle className="spinner" size={17} /> : null} Criar conta</button>
+          </form>
+        ) : (
+          <form className="modal-form login-form" onSubmit={onLogin}>
+            <label>{LOCAL_MODE ? 'E-mail ou usuário de teste' : 'Usuário ou e-mail'}<input type="text" name="email" placeholder={LOCAL_MODE ? 'Informe seu e-mail cadastrado' : 'Digite qualquer usuário'} autoComplete="username" required maxLength="180" /></label>
+            <label>Senha<input type="password" name="password" placeholder={LOCAL_MODE ? 'Digite sua senha' : 'Digite qualquer senha'} autoComplete="current-password" required maxLength="256" /></label>
+            <div className="login-options">
+              <a href="/recuperar-senha">Esqueceu a senha?</a>
+              {LOCAL_MODE && <a href="#register" onClick={(event) => { event.preventDefault(); setActiveTab('register') }}>Registrar-se</a>}
+            </div>
+            <button className="button button-primary login-submit" disabled={busy}>{busy ? <LoaderCircle className="spinner" size={17} /> : null} Entrar</button>
+          </form>
+        )}
+        <p className="login-help">{LOCAL_MODE ? 'Contas e dados de teste ficam salvos somente neste navegador.' : 'Acesso temporário: informe qualquer usuário e senha.'}</p>
       </section>
     </main>
   )
 }
 
-function TaskCard({ task, openHistory, showMovement, completeTask }) {
+function TaskCard({ task, openHistory, showMovement, changeTaskStatus, completeTask }) {
   const [dragging, setDragging] = useState(false)
   const isOverdue = task.overdue
   const isDueSoon = task.dueSoon && !task.overdue
@@ -199,16 +218,36 @@ function TaskCard({ task, openHistory, showMovement, completeTask }) {
 
       <div className="card-hover-actions" onClick={(e) => e.stopPropagation()}>
         {task.status === 'pending' && (
-          <button className="card-mini-btn" title="Encaminhar" onClick={() => showMovement(task, 'forward')}>
+          <button className="card-mini-btn" title="Encaminhar para Pendente" aria-label="Encaminhar para Pendente" onClick={() => showMovement(task, 'forward')}>
             <Send size={12} />
           </button>
         )}
-        {task.status === 'in_progress' && (
+        {task.status === 'waiting' && (
           <>
-            <button className="card-mini-btn" title="Devolver para a fila" onClick={() => showMovement(task, 'return')}>
+            <button
+              className="card-mini-btn"
+              title="Encaminhar para Em andamento"
+              aria-label="Encaminhar para Em andamento"
+              onClick={() => task.assignee_id ? changeTaskStatus(task, 'in_progress') : showMovement(task, 'forward')}
+            >
+              <Send size={12} />
+            </button>
+            <button
+              className="card-mini-btn"
+              title="Devolver para Na fila"
+              aria-label="Devolver tarefa para Na fila"
+              onClick={() => task.assignee_id ? showMovement(task, 'return') : changeTaskStatus(task, 'pending')}
+            >
               <ArrowDownLeft size={12} />
             </button>
-            <button className="card-mini-btn complete" title="Concluir" onClick={() => completeTask(task)}>
+          </>
+        )}
+        {task.status === 'in_progress' && (
+          <>
+            <button className="card-mini-btn" title="Devolver para Na fila" aria-label="Devolver tarefa para Na fila" onClick={() => showMovement(task, 'return')}>
+              <ArrowDownLeft size={12} />
+            </button>
+            <button className="card-mini-btn complete" title="Concluir" aria-label="Concluir tarefa" onClick={() => completeTask(task)}>
               <Check size={12} />
             </button>
           </>
@@ -229,7 +268,6 @@ function App() {
   const [activePage, setActivePage] = useState('board')
   const [search, setSearch] = useState('')
   const [consultationSearch, setConsultationSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState('')
   const [modal, setModal] = useState(null)
   const [selectedTask, setSelectedTask] = useState(null)
   const [selectedMember, setSelectedMember] = useState(null)
@@ -430,11 +468,13 @@ function App() {
     total: tasks.filter((task) => task.status !== 'completed').length,
     inProgress: tasks.filter((task) => task.status === 'in_progress').length,
     pending: tasks.filter((task) => task.status === 'pending').length,
+    waiting: tasks.filter((task) => task.status === 'waiting').length,
     completed: tasks.filter((task) => task.status === 'completed').length,
   }), [tasks])
   const consultationTasks = useMemo(() => {
     const query = consultationSearch.trim().toLocaleLowerCase('pt-BR')
     return tasks.filter((task) => {
+      if (task.status !== 'completed') return false
       const matchesSearch = !query || [
         getTaskCode(task.id),
         task.title,
@@ -443,13 +483,11 @@ function App() {
         task.assignee_name,
       ].some((value) => String(value || '').toLocaleLowerCase('pt-BR').includes(query))
       return matchesSearch
-        && (!statusFilter || task.status === statusFilter)
     })
-  }, [tasks, consultationSearch, statusFilter])
+  }, [tasks, consultationSearch])
 
   function clearConsultationFilters() {
     setConsultationSearch('')
-    setStatusFilter('')
   }
 
   async function submitLogin(event) {
@@ -460,11 +498,14 @@ function App() {
     try {
       if (LOCAL_MODE) {
         const identity = String(form.get('email')).trim()
+        const account = identity.toLocaleLowerCase('pt-BR') === 'admin'
+          ? { name: 'admin', email: identity }
+          : await authenticateLocalAccount(identity, String(form.get('password')))
         const result = {
           token: 'local-test-session',
           user: {
-            name: identity.includes('@') ? identity.split('@')[0] : identity,
-            email: identity,
+            name: account.name,
+            email: account.email,
             is_admin: identity.toLocaleLowerCase('pt-BR') === 'admin',
           },
         }
@@ -488,6 +529,40 @@ function App() {
       setToken(result.token)
     } catch (loginError) {
       setError(loginError.message)
+    } finally {
+      setLoginBusy(false)
+    }
+  }
+
+  async function submitRegistration(event) {
+    event.preventDefault()
+    setLoginBusy(true)
+    setError('')
+    const form = new FormData(event.currentTarget)
+    const password = String(form.get('password'))
+    if (password !== String(form.get('confirmPassword'))) {
+      setError('As senhas não coincidem.')
+      setLoginBusy(false)
+      return
+    }
+
+    try {
+      const account = await registerLocalAccount({
+        name: form.get('name'),
+        email: form.get('email'),
+        password,
+      })
+      const result = {
+        token: 'local-test-session',
+        user: { ...account, is_admin: false },
+      }
+      sessionStorage.setItem('fluxo.token', result.token)
+      sessionStorage.setItem('fluxo.user', JSON.stringify(result.user))
+      setLoading(true)
+      setUser(result.user)
+      setToken(result.token)
+    } catch (registrationError) {
+      setError(registrationError.message)
     } finally {
       setLoginBusy(false)
     }
@@ -658,7 +733,7 @@ function App() {
       if (LOCAL_MODE) {
         moveLocalTask(selectedTask.id, isReturn ? 'returned' : 'forwarded', isReturn ? null : Number(form.get('member_id')), note)
         setModal(null)
-        setNotice(isReturn ? 'Tarefa devolvida para a fila.' : 'Tarefa encaminhada com sucesso.')
+        setNotice(isReturn ? 'Tarefa devolvida para a fila.' : selectedTask.status === 'pending' ? 'Tarefa encaminhada para Pendente.' : 'Tarefa encaminhada para Em andamento.')
         await loadData()
         return
       }
@@ -669,7 +744,7 @@ function App() {
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || 'Não foi possível atualizar a tarefa.')
       setModal(null)
-      setNotice(isReturn ? 'Tarefa devolvida para a fila.' : 'Tarefa encaminhada com sucesso.')
+      setNotice(result.message || (isReturn ? 'Tarefa devolvida para a fila.' : 'Tarefa encaminhada com sucesso.'))
       await loadData()
     } catch (requestError) {
       setError(requestError.message)
@@ -691,6 +766,26 @@ function App() {
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || 'Não foi possível concluir a tarefa.')
       setNotice('Tarefa concluída.')
+      await loadData()
+    } catch (requestError) {
+      setError(requestError.message)
+    }
+  }
+
+  async function changeTaskStatus(task, status) {
+    setError('')
+    try {
+      if (LOCAL_MODE) {
+        setLocalTaskStatus(task.id, status)
+      } else {
+        const response = await apiFetch(`/tasks/${task.id}/status`, {
+          method: 'PATCH',
+          body: JSON.stringify({ status }),
+        })
+        const result = await response.json()
+        if (!response.ok) throw new Error(result.error || 'Não foi possível mover a tarefa.')
+      }
+      setNotice(`Tarefa movida para ${statusLabels[status]}.`)
       await loadData()
     } catch (requestError) {
       setError(requestError.message)
@@ -731,15 +826,24 @@ function App() {
     event.preventDefault()
     const task = tasks.find((item) => String(item.id) === event.dataTransfer.getData('text/plain'))
     if (!task || task.status === status || task.status === 'completed') return
-    if (status === 'in_progress') showMovement(task, 'forward')
-    else if (status === 'pending') showMovement(task, 'return')
-    else completeTask(task)
+    if (status === 'in_progress') {
+      if (task.status !== 'waiting') {
+        setError('Mova a tarefa para Pendente antes de colocá-la Em andamento.')
+        return
+      }
+      if (task.assignee_id) changeTaskStatus(task, status)
+      else showMovement(task, 'forward')
+    } else if (status === 'pending' && task.assignee_id) {
+      showMovement(task, 'return')
+    } else {
+      changeTaskStatus(task, status)
+    }
   }
 
-  if (!token) return <LoginScreen onLogin={submitLogin} busy={loginBusy} error={error} theme={theme} toggleTheme={toggleTheme} />
+  if (!token) return <LoginScreen onLogin={submitLogin} onRegister={submitRegistration} busy={loginBusy} error={error} theme={theme} toggleTheme={toggleTheme} />
 
   const pageTitle = activePage === 'consultation'
-    ? 'Consulta de tarefas'
+    ? 'Tarefas finalizadas'
     : activePage === 'profiles' ? 'Gerenciar perfis' : 'Quadro de tarefas'
 
   return (
@@ -749,13 +853,11 @@ function App() {
         <span className="nav-label">MENU PRINCIPAL</span>
         <nav className="main-nav" aria-label="Menu principal">
           <button className={activePage === 'board' ? 'nav-item active' : 'nav-item'} onClick={() => setActivePage('board')}><LayoutDashboard size={18} /> Quadro Kanban</button>
-          <button className={activePage === 'consultation' ? 'nav-item active' : 'nav-item'} onClick={() => setActivePage('consultation')}><FileText size={18} /> Consulta de tarefas</button>
+          <button className={activePage === 'consultation' ? 'nav-item active' : 'nav-item'} onClick={() => setActivePage('consultation')}><FileText size={18} /> Tarefas finalizadas</button>
           {user?.is_admin && <button className={activePage === 'profiles' ? 'nav-item active' : 'nav-item'} onClick={openProfiles}><UsersRound size={18} /> Gerenciar perfis</button>}
         </nav>
         <div className="sidebar-bottom">
           <ThemeButton theme={theme} toggleTheme={toggleTheme} />
-          <button className="nav-item"><Settings size={18} /> Configurações</button>
-          <button className="nav-item"><CircleHelp size={18} /> Central de ajuda</button>
           <div className="profile-card"><span className="avatar avatar-indigo">{getInitials(user?.name || 'Admin')}</span><span className="profile-copy"><strong>{user?.name || 'Administrador'}</strong><small>{user?.email}</small></span><button className="row-action logout-button" onClick={logout} title="Sair" aria-label="Sair"><LogOut size={15} /></button></div>
         </div>
       </aside>
@@ -768,7 +870,7 @@ function App() {
 
         <div className="page-content">
           <section className="page-heading">
-            <div><p className="eyebrow">ACOMPANHAMENTO DE EQUIPE</p><h1>{pageTitle}</h1><p className="page-subtitle">{activePage === 'board' ? 'Organize o fluxo de trabalho da equipe em um só lugar.' : 'Consulte responsáveis, prazos e o tempo de cada tarefa.'}</p></div>
+            <div><p className="eyebrow">ACOMPANHAMENTO DE EQUIPE</p><h1>{pageTitle}</h1><p className="page-subtitle">{activePage === 'board' ? 'Organize o fluxo de trabalho da equipe em um só lugar.' : activePage === 'consultation' ? 'Consulte processos já concluídos.' : 'Consulte responsáveis, prazos e o tempo de cada tarefa.'}</p></div>
             {activePage === 'board' && <button className="button button-primary" onClick={() => { setError(''); setModal('create') }}><Plus size={17} /> Nova tarefa</button>}
           </section>
 
@@ -801,6 +903,7 @@ function App() {
               <article className="stat-card"><div className="stat-top"><span className="stat-icon icon-lilac"><ListTodo size={18} /></span><span className="stat-period">Neste momento</span></div><strong className="stat-value">{counts.total}</strong><span className="stat-label">Tarefas ativas</span><div className="stat-foot"><span className="stat-foot-dot dot-purple" /> Em acompanhamento</div></article>
               <article className="stat-card"><div className="stat-top"><span className="stat-icon icon-blue"><UsersRound size={18} /></span><span className="stat-period">Com responsável</span></div><strong className="stat-value">{counts.inProgress}</strong><span className="stat-label">Em andamento</span><div className="stat-foot"><span className="stat-foot-dot dot-blue" /> Tarefas encaminhadas</div></article>
               <article className="stat-card"><div className="stat-top"><span className="stat-icon icon-amber"><Clock3 size={18} /></span><span className="stat-period">Aguardando envio</span></div><strong className="stat-value">{counts.pending}</strong><span className="stat-label">Na fila</span><div className="stat-foot"><span className="stat-foot-dot dot-amber" /> Sem responsável</div></article>
+              <article className="stat-card"><div className="stat-top"><span className="stat-icon icon-amber"><Clock3 size={18} /></span><span className="stat-period">Aguardando andamento</span></div><strong className="stat-value">{counts.waiting}</strong><span className="stat-label">Pendentes</span><div className="stat-foot"><span className="stat-foot-dot dot-amber" /> Em espera</div></article>
               <article className="stat-card"><div className="stat-top"><span className="stat-icon icon-green"><Check size={18} /></span><span className="stat-period">Total concluídas</span></div><strong className="stat-value">{counts.completed}</strong><span className="stat-label">Concluídas</span><div className="stat-foot"><span className="stat-foot-dot dot-green" /> Finalizadas pela equipe</div></article>
             </section>
             <section className="kanban-section">
@@ -852,6 +955,7 @@ function App() {
                                 task={task}
                                 openHistory={openHistory}
                                 showMovement={showMovement}
+                                changeTaskStatus={changeTaskStatus}
                                 completeTask={completeTask}
                               />
                             ))}
@@ -879,16 +983,15 @@ function App() {
               )}
             </section>
           </> : <section className="tasks-panel consultation-panel">
-            <div className="panel-heading"><div><h2>Consulta de tarefas</h2><p>Busque pelo código ou texto e filtre pela etapa.</p></div><span className="consultation-count">{consultationTasks.length} tarefas</span></div>
+            <div className="panel-heading"><div><h2>Tarefas finalizadas</h2><p>Consulte tarefas concluídas por código ou texto.</p></div><span className="consultation-count">{consultationTasks.length} tarefas</span></div>
             <div className="consultation-filters">
               <label className="consultation-search"><span>Código ou texto</span><span className="search-field"><Search size={16} /><input value={consultationSearch} onChange={(event) => setConsultationSearch(event.target.value)} placeholder="Ex.: TAR-000001 ou relatório" /></span></label>
-              <label><span>Etapa</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">Todas</option>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
               <button className="text-button clear-filters" onClick={clearConsultationFilters}>Limpar filtros</button>
             </div>
             <div className="task-table-wrap"><table className="task-table consultation-table"><thead><tr><th>TAREFA / CÓDIGO</th><th>ETAPA</th><th>RESPONSÁVEL ATUAL</th><th>DESDE</th><th>TEMPO NESTA ETAPA</th><th>PRAZO</th><th aria-label="Histórico" /></tr></thead><tbody>
-              {loading ? <tr><td className="table-state" colSpan="7"><LoaderCircle className="spinner" size={20} /> Carregando tarefas...</td></tr> : !consultationTasks.length ? <tr><td className="table-state" colSpan="7">Nenhuma tarefa encontrada com esses filtros.</td></tr> : consultationTasks.map((task) => <tr key={task.id}>
+              {loading ? <tr><td className="table-state" colSpan="7"><LoaderCircle className="spinner" size={20} /> Carregando processos...</td></tr> : !consultationTasks.length ? <tr><td className="table-state" colSpan="7">Nenhum processo finalizado encontrado.</td></tr> : consultationTasks.map((task) => <tr key={task.id}>
                 <td><span className="task-code">{getTaskCode(task.id)}</span><button className="task-title-button" onClick={() => openHistory(task)}>{task.title}</button><span className="task-description">{task.category || task.description || 'Sem categoria'}</span>{LOCAL_MODE && <span className={`task-open-state${task.opened_at ? ' opened' : ''}`}>{task.opened_at ? `Detalhes acessados · ${new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(task.opened_at))}` : 'Detalhes ainda não acessados'}</span>}</td>
-                <td><span className={`status-pill status-${task.status}`}>{task.status === 'pending' ? 'Na fila' : task.status === 'completed' ? 'Concluída' : 'Em andamento'}</span></td>
+                <td><span className={`status-pill status-${task.status}`}>{statusLabels[task.status]}</span></td>
                 <td>{task.assignee_name ? <div className="person-cell"><span className={`avatar ${Number(task.assignee_id) % 2 ? 'avatar-indigo' : 'avatar-teal'}`}>{getInitials(task.assignee_name)}</span><span>{task.assignee_name}</span></div> : <span className="unassigned"><span />Sem responsável</span>}</td>
                 <td>{task.current_since ? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(task.current_since)) : '—'}</td>
                 <td><span className={task.status === 'pending' ? 'elapsed waiting' : 'elapsed'}><Clock3 size={14} />{task.status === 'completed' ? 'Concluída' : formatElapsed(task.current_since, now)}</span></td>
@@ -899,7 +1002,7 @@ function App() {
                 </div></td>
               </tr>)}
             </tbody></table></div>
-            <footer className="table-footer"><span>Exibindo <strong>{consultationTasks.length}</strong> de <strong>{tasks.length}</strong> tarefas</span><button className="text-button" onClick={clearConsultationFilters}>Limpar filtros</button></footer>
+            <footer className="table-footer"><span>Exibindo <strong>{consultationTasks.length}</strong> de <strong>{tasks.filter((task) => task.status === 'completed').length}</strong> tarefas finalizadas</span><button className="text-button" onClick={clearConsultationFilters}>Limpar busca</button></footer>
           </section>}
           <p className="page-footnote"><span className="live-dot" /> {LOCAL_MODE ? 'Dados salvos neste navegador' : 'Dados sincronizados com o sistema'} <span className="footnote-divider">·</span> O tempo é atualizado automaticamente</p>
         </div>
@@ -907,7 +1010,7 @@ function App() {
 
       <nav className="mobile-nav" aria-label="Navegação mobile">
         <button className={activePage === 'board' ? 'mobile-nav-item active' : 'mobile-nav-item'} onClick={() => setActivePage('board')}><LayoutDashboard size={19} /><span>Kanban</span></button>
-        <button className={activePage === 'consultation' ? 'mobile-nav-item active' : 'mobile-nav-item'} onClick={() => setActivePage('consultation')}><FileText size={19} /><span>Consulta</span></button>
+        <button className={activePage === 'consultation' ? 'mobile-nav-item active' : 'mobile-nav-item'} onClick={() => setActivePage('consultation')}><FileText size={19} /><span>Tarefas finalizadas</span></button>
         {user?.is_admin && <button className={activePage === 'profiles' ? 'mobile-nav-item active' : 'mobile-nav-item'} onClick={openProfiles}><UsersRound size={19} /><span>Perfis</span></button>}
         {activePage === 'board' && <button className="mobile-nav-item" onClick={() => { setError(''); setModal('create') }}><Plus size={20} /><span>Nova tarefa</span></button>}
         <button className="mobile-nav-item" onClick={logout}><LogOut size={19} /><span>Sair</span></button>
@@ -939,7 +1042,7 @@ function App() {
           {modal === 'history' && <div className="history-content">
             <div className="history-task-summary"><span className="modal-kicker">TAREFA · {getTaskCode(selectedTask?.id)}</span><h3>{selectedTask?.title}</h3><p>{selectedTask?.description || selectedTask?.category || 'Sem descrição adicional.'}</p>{LOCAL_MODE && <p className="open-receipt">{selectedTask?.opened_at ? `Detalhes acessados em ${new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(selectedTask.opened_at))}. O registro não identifica quem abriu.` : 'Detalhes ainda não acessados.'}</p>}<div className="history-summary-meta"><span className={`priority priority-${selectedTask?.priority}`}>{priorities[selectedTask?.priority] || 'Média'} prioridade</span><span><Clock3 size={14} /> {selectedTask?.status === 'completed' ? 'Tarefa concluída' : formatElapsed(selectedTask?.current_since, now)}{selectedTask?.status !== 'completed' && ' nesta etapa'}</span>{selectedTask?.due_date && <span className={getDeadlineState(selectedTask).overdue ? 'deadline overdue' : getDeadlineState(selectedTask).dueSoon ? 'deadline due-soon' : 'deadline'}>{getDeadlineState(selectedTask).label}</span>}</div></div>
             <h3 className="timeline-heading">Movimentações <span>{history.length}</span></h3>
-            {history.length === 0 ? <p className="empty-history">Nenhuma movimentação registrada.</p> : <ol className="timeline">{history.map((item) => <li key={item.id} className="timeline-item"><span className={`timeline-marker ${item.action}`} /><div className="timeline-entry"><strong>{item.action === 'created' ? 'Tarefa criada' : item.action === 'forwarded' ? 'Tarefa encaminhada' : item.action === 'returned' ? 'Tarefa devolvida' : item.action === 'reopened' ? 'Tarefa reaberta' : 'Tarefa concluída'}</strong><p>{item.action === 'created' ? `Criada${item.to_member_name ? ` e atribuída a ${item.to_member_name}` : ' na fila'}` : item.action === 'forwarded' ? `${item.from_member_name || 'Fila'} → ${item.to_member_name}` : item.action === 'returned' ? `${item.from_member_name || 'Responsável'} → Fila de tarefas` : item.action === 'reopened' ? `Administrador → ${item.to_member_name || 'responsável anterior'}` : `Concluída por ${item.from_member_name || 'responsável'}`}</p>{item.note && <blockquote>{item.note}</blockquote>}<small>{new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(item.created_at))}{item.duration_minutes != null && ` · permaneceu ${formatDuration(item.duration_minutes)}`}</small></div></li>)}</ol>}
+            {history.length === 0 ? <p className="empty-history">Nenhuma movimentação registrada.</p> : <ol className="timeline">{history.map((item) => <li key={item.id} className="timeline-item"><span className={`timeline-marker ${item.action}`} /><div className="timeline-entry"><strong>{item.action === 'created' ? 'Tarefa criada' : item.action === 'forwarded' ? 'Tarefa encaminhada' : item.action === 'returned' ? 'Tarefa devolvida' : item.action === 'reopened' ? 'Tarefa reaberta' : item.action === 'status_changed' ? 'Etapa alterada' : 'Tarefa concluída'}</strong><p>{item.action === 'status_changed' ? item.note : item.action === 'created' ? `Criada${item.to_member_name ? ` e atribuída a ${item.to_member_name}` : ' na fila'}` : item.action === 'forwarded' ? `${item.from_member_name || 'Fila'} → ${item.to_member_name}` : item.action === 'returned' ? `${item.from_member_name || 'Responsável'} → Fila de tarefas` : item.action === 'reopened' ? `Administrador → ${item.to_member_name || 'responsável anterior'}` : `Concluída por ${item.from_member_name || 'responsável'}`}</p>{item.note && item.action !== 'status_changed' && <blockquote>{item.note}</blockquote>}<small>{new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(item.created_at))}{item.duration_minutes != null && ` · permaneceu ${formatDuration(item.duration_minutes)}`}</small></div></li>)}</ol>}
 
             <div className="detail-section">
               <h3 className="timeline-heading">Comentários <span>{comments.length}</span></h3>
@@ -959,7 +1062,10 @@ function App() {
               {attachments.length === 0 ? <p className="empty-history">Nenhum anexo enviado.</p> : <ul className="attachment-list">{attachments.map((file) => <li key={file.id}><span className="attachment-name">{file.filename}<small>{file.size_bytes ? `${Math.max(1, Math.round(file.size_bytes / 1024))} KB` : 'Arquivo'} · {file.member_name || 'Usuário'}</small></span><button type="button" className="row-action" aria-label={`Baixar ${file.filename}`} title={`Baixar ${file.filename}`} onClick={() => downloadAttachment(file)}><Download size={15} /></button></li>)}</ul>}
             </div>
 
-            <div className="modal-actions"><button className="button button-secondary" onClick={() => setModal(null)}>Fechar</button>{selectedTask?.status === 'completed' && user?.is_admin && <button className="button button-primary" onClick={() => reopenTask(selectedTask)}><RotateCcw size={15} /> Reabrir processo</button>}{selectedTask?.status !== 'completed' && (selectedTask?.assignee_id ? <button className="button button-primary" onClick={() => showMovement(selectedTask, 'return')}><ArrowDownLeft size={16} /> Devolver tarefa</button> : <button className="button button-primary" onClick={() => showMovement(selectedTask, 'forward')}><Send size={15} /> Encaminhar tarefa</button>)}</div>
+            <div className="modal-actions">
+              <button className="button button-secondary" onClick={() => setModal(null)}>Fechar</button>
+              {selectedTask?.status === 'completed' && user?.is_admin && <button className="button button-primary" onClick={() => reopenTask(selectedTask)}><RotateCcw size={15} /> Reabrir processo</button>}
+            </div>
           </div>}
         </section>
       </div>}

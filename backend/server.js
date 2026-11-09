@@ -251,7 +251,7 @@ app.patch('/api/admin/members/:id', requireTestAdmin, async (request, response, 
     )
     if (department !== rows[0].department) {
       await connection.execute(
-        "UPDATE tasks SET department = ? WHERE assignee_id = ? AND status = 'in_progress'",
+        "UPDATE tasks SET department = ? WHERE assignee_id = ? AND status IN ('waiting', 'in_progress')",
         [department, memberId],
       )
     }
@@ -297,7 +297,7 @@ app.get('/api/tasks', async (request, response, next) => {
       FROM tasks t
       LEFT JOIN team_members m ON m.id = t.assignee_id
       WHERE (? = '' OR t.department = ? OR t.assignee_id = ?)
-      ORDER BY FIELD(t.status, 'in_progress', 'pending', 'completed'),
+      ORDER BY FIELD(t.status, 'pending', 'waiting', 'in_progress', 'completed'),
         COALESCE(t.due_date, '9999-12-31'), t.created_at DESC
     `, [department, department, memberId])
 
@@ -357,11 +357,11 @@ app.post('/api/tasks', async (request, response, next) => {
       taskDepartment = members[0].department || taskDepartment
     }
 
-    const status = memberId === null ? 'pending' : 'in_progress'
+    const status = 'pending'
     const [result] = await connection.execute(
       `INSERT INTO tasks (title, description, category, priority, status, due_date, department, assignee_id, current_since)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [title.trim(), description.trim(), category.trim(), priority, status, due_date, taskDepartment, memberId, memberId === null ? null : new Date()],
+      [title.trim(), description.trim(), category.trim(), priority, status, due_date, taskDepartment, memberId, null],
     )
     await connection.execute(
       `INSERT INTO task_history (task_id, action, from_member_id, to_member_id)
@@ -422,9 +422,10 @@ app.post('/api/tasks/:id/forward', async (request, response, next) => {
     }
 
     const nextDepartment = members[0].department || task.department || request.user?.department || ''
+    const nextStatus = task.status === 'pending' ? 'waiting' : task.status === 'waiting' ? 'in_progress' : task.status
     await connection.execute(
       'UPDATE tasks SET assignee_id = ?, department = ?, status = ?, current_since = NOW() WHERE id = ?',
-      [memberId, nextDepartment, 'in_progress', taskId],
+      [memberId, nextDepartment, nextStatus, taskId],
     )
     await connection.execute(
       `INSERT INTO task_history (task_id, action, from_member_id, to_member_id, note)
@@ -432,7 +433,7 @@ app.post('/api/tasks/:id/forward', async (request, response, next) => {
       [taskId, task.assignee_id, memberId, note.trim() || null],
     )
     await connection.commit()
-    response.json({ message: 'Tarefa encaminhada com sucesso.' })
+    response.json({ message: `Tarefa encaminhada para ${nextStatus === 'waiting' ? 'Pendente' : 'Em andamento'}.` })
   } catch (error) {
     await connection.rollback()
     next(error)
@@ -490,6 +491,71 @@ app.post('/api/tasks/:id/return', async (request, response, next) => {
     )
     await connection.commit()
     response.json({ message: 'Tarefa devolvida para a fila.' })
+  } catch (error) {
+    await connection.rollback()
+    next(error)
+  } finally {
+    connection.release()
+  }
+})
+
+app.patch('/api/tasks/:id/status', async (request, response, next) => {
+  const taskId = Number(request.params.id)
+  const status = request.body?.status
+  const allowedStatuses = ['pending', 'waiting', 'in_progress']
+  const statusLabels = { pending: 'Na fila', waiting: 'Pendente', in_progress: 'Em andamento' }
+  if (!Number.isInteger(taskId) || taskId < 1 || !allowedStatuses.includes(status)) {
+    return response.status(400).json({ error: 'Tarefa ou etapa inválida.' })
+  }
+
+  const connection = await pool.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [tasks] = await connection.execute(
+      'SELECT id, status, assignee_id, department FROM tasks WHERE id = ? FOR UPDATE',
+      [taskId],
+    )
+    if (!tasks.length) {
+      await connection.rollback()
+      return response.status(404).json({ error: 'Tarefa não encontrada.' })
+    }
+    const task = tasks[0]
+    if (!isTaskVisibleForUser(task, request.user)) {
+      await connection.rollback()
+      return response.status(403).json({ error: 'Você não tem permissão para acessar esta tarefa.' })
+    }
+    if (task.status === 'completed') {
+      await connection.rollback()
+      return response.status(400).json({ error: 'Não é possível mover uma tarefa concluída.' })
+    }
+    if (status === 'in_progress' && task.status !== 'waiting') {
+      await connection.rollback()
+      return response.status(400).json({ error: 'Mova a tarefa para Pendente antes de colocá-la Em andamento.' })
+    }
+    if (status === 'in_progress' && task.assignee_id === null) {
+      await connection.rollback()
+      return response.status(400).json({ error: 'Encaminhe a tarefa antes de iniciar.' })
+    }
+    if (status === 'pending' && task.assignee_id !== null) {
+      await connection.rollback()
+      return response.status(400).json({ error: 'Devolva a tarefa para a fila usando o motivo da devolução.' })
+    }
+    if (task.status === status) {
+      await connection.rollback()
+      return response.json({ message: 'A tarefa já está nesta etapa.' })
+    }
+
+    await connection.execute(
+      'UPDATE tasks SET status = ?, current_since = ? WHERE id = ?',
+      [status, status === 'pending' ? null : new Date(), taskId],
+    )
+    await connection.execute(
+      `INSERT INTO task_history (task_id, action, note)
+       VALUES (?, 'status_changed', ?)`,
+      [taskId, `${statusLabels[task.status] || 'Etapa anterior'} → ${statusLabels[status]}`],
+    )
+    await connection.commit()
+    response.json({ message: `Tarefa movida para ${statusLabels[status]}.` })
   } catch (error) {
     await connection.rollback()
     next(error)

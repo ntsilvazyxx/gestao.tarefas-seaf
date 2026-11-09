@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   description TEXT NOT NULL,
   category VARCHAR(80) NOT NULL DEFAULT '',
   priority ENUM('low', 'medium', 'high') NOT NULL DEFAULT 'medium',
-  status ENUM('pending', 'in_progress', 'completed') NOT NULL DEFAULT 'pending',
+  status ENUM('pending', 'waiting', 'in_progress', 'completed') NOT NULL DEFAULT 'pending',
   due_date DATE NULL,
   department VARCHAR(80) NOT NULL DEFAULT '',
   assignee_id INT UNSIGNED NULL,
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE TABLE IF NOT EXISTS task_history (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   task_id BIGINT UNSIGNED NOT NULL,
-  action ENUM('created', 'forwarded', 'returned', 'completed', 'reopened') NOT NULL,
+  action ENUM('created', 'forwarded', 'returned', 'completed', 'reopened', 'status_changed') NOT NULL,
   from_member_id INT UNSIGNED NULL,
   to_member_id INT UNSIGNED NULL,
   note VARCHAR(1000) NULL,
