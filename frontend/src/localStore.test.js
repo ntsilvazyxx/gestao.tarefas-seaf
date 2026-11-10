@@ -13,6 +13,7 @@ import {
   moveLocalTask,
   reopenLocalTask,
   registerLocalAccount,
+  resetLocalAccountPassword,
   setLocalMemberActive,
   setLocalTaskStatus,
   updateLocalMember,
@@ -52,6 +53,39 @@ test('registers local accounts and authenticates them without storing plain-text
   const storedAccounts = JSON.parse(localStorage.getItem('fluxo.localAccounts.v1'))
   assert.equal(storedAccounts[0].password, undefined)
   assert.equal(storedAccounts[0].passwordHash.length, 32)
+})
+
+test('resets or initializes a local profile password using a secure hash', async () => {
+  useMemoryStorage()
+  await registerLocalAccount({
+    name: 'Pessoa de Teste',
+    email: 'pessoa@exemplo.com',
+    password: 'senha-antiga-123',
+  })
+
+  await resetLocalAccountPassword({
+    name: 'Pessoa Atualizada',
+    email: 'pessoa@exemplo.com',
+    password: 'senha-nova-456',
+  })
+  await assert.rejects(
+    authenticateLocalAccount('pessoa@exemplo.com', 'senha-antiga-123'),
+    /E-mail ou senha incorretos/,
+  )
+  assert.deepEqual(
+    await authenticateLocalAccount('pessoa@exemplo.com', 'senha-nova-456'),
+    { name: 'Pessoa Atualizada', email: 'pessoa@exemplo.com' },
+  )
+
+  await resetLocalAccountPassword({
+    name: 'Novo Perfil',
+    email: 'novo@exemplo.com',
+    password: 'senha-inicial-789',
+  })
+  assert.deepEqual(
+    await authenticateLocalAccount('novo@exemplo.com', 'senha-inicial-789'),
+    { name: 'Novo Perfil', email: 'novo@exemplo.com' },
+  )
 })
 
 test('creates tasks locally and retains them after reloading the stored data', () => {
@@ -146,13 +180,14 @@ test('moves tasks through queue, pending, and in-progress stages with history', 
 
 test('admin test profiles can be created, edited, and deactivated', () => {
   useMemoryStorage()
-  const member = createLocalMember({ name: 'Pessoa Teste', email: 'pessoa@exemplo.com', department: 'Jurídico' })
+  const member = createLocalMember({ name: 'Pessoa Teste', email: 'pessoa@exemplo.com', department: 'Jurídico', profile_type: 'Gestor' })
   const task = createLocalTask({ title: 'Revisar contrato', assignee_id: member.id })
   setLocalTaskStatus(task.id, 'waiting')
 
-  updateLocalMember(member.id, { name: 'Pessoa Atualizada', email: 'pessoa@exemplo.com', department: 'Compras' })
+  updateLocalMember(member.id, { name: 'Pessoa Atualizada', email: 'pessoa@exemplo.com', department: 'Compras', profile_type: 'Secretário' })
   assert.equal(loadLocalData()[0][0].assignee_name, 'Pessoa Atualizada')
   assert.equal(loadLocalData()[0][0].department, 'Compras')
+  assert.equal(loadLocalMembers().find((item) => item.id === member.id).profile_type, 'Secretário')
   assert.equal(loadLocalData()[0][0].status, 'waiting')
 
   setLocalMemberActive(member.id, false)

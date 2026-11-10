@@ -11,6 +11,7 @@ import {
   Clock3,
   Download,
   FileText,
+  KeyRound,
   LayoutDashboard,
   ListTodo,
   LoaderCircle,
@@ -41,6 +42,7 @@ import {
   moveLocalTask,
   reopenLocalTask,
   registerLocalAccount,
+  resetLocalAccountPassword,
   setLocalMemberActive,
   setLocalTaskStatus,
   updateLocalMember,
@@ -179,18 +181,17 @@ function TaskCard({ task, openHistory, showMovement, changeTaskStatus, completeT
       onDragEnd={() => setDragging(false)}
       onClick={() => openHistory(task)}
     >
-      <div className="card-topline">
+      <div className="card-labels">
+        <span className={`card-priority card-priority-${task.priority}`} title={`Prioridade: ${priorities[task.priority] || 'Média'}`}>
+          {priorities[task.priority] || 'Média'}
+        </span>
         <span className="card-code">{getTaskCode(task.id)}</span>
-        <span className={`priority-indicator priority-${task.priority}`} title={`Prioridade: ${priorities[task.priority] || 'Média'}`} />
+        {task.category && <span className="card-category-tag">{task.category}</span>}
       </div>
 
       <h3 className="kanban-task-title">{task.title}</h3>
 
-      {task.category && (
-        <div className="card-tag-wrapper">
-          <span className="card-category-tag">{task.category}</span>
-        </div>
-      )}
+      {task.description && <p className="kanban-description">{task.description}</p>}
 
       <div className="card-footer">
         <div className="card-assignee">
@@ -211,6 +212,7 @@ function TaskCard({ task, openHistory, showMovement, changeTaskStatus, completeT
 
         {task.due_date && (
           <span className={`card-date${isOverdue ? ' date-overdue' : isDueSoon ? ' date-due-soon' : ''}`}>
+            <CalendarDays size={12} />
             {formatDate(task.due_date)}
           </span>
         )}
@@ -384,6 +386,7 @@ function App() {
       name: form.get('name'),
       email: form.get('email'),
       department: form.get('department'),
+      profile_type: form.get('profile_type'),
     }
     try {
       if (LOCAL_MODE) {
@@ -407,6 +410,40 @@ function App() {
     } finally {
       setSaving(false)
     }
+  }
+
+  async function submitPasswordReset(event) {
+    event.preventDefault()
+    setSaving(true)
+    setError('')
+    const form = new FormData(event.currentTarget)
+    const password = String(form.get('password') || '')
+    const confirmation = String(form.get('confirmPassword') || '')
+    if (password !== confirmation) {
+      setError('As senhas não conferem.')
+      setSaving(false)
+      return
+    }
+
+    try {
+      await resetLocalAccountPassword({
+        name: selectedMember?.name,
+        email: selectedMember?.email,
+        password,
+      })
+      setModal(null)
+      setNotice(`Senha redefinida para ${selectedMember.name}.`)
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function openPasswordReset(member) {
+    setSelectedMember(member)
+    setError('')
+    setModal('resetPassword')
   }
 
   async function toggleMemberActive(member) {
@@ -883,15 +920,17 @@ function App() {
               <button className="button button-primary" onClick={() => openMemberForm()}><UserPlus size={16} /> Novo perfil</button>
             </div>
             <div className="task-table-wrap"><table className="task-table profile-table">
-              <thead><tr><th>PERFIL</th><th>E-MAIL</th><th>DEPARTAMENTO</th><th>STATUS</th><th>AÇÕES</th></tr></thead>
+              <thead><tr><th>PERFIL</th><th>TIPO</th><th>E-MAIL</th><th>DEPARTAMENTO</th><th>STATUS</th><th>AÇÕES</th></tr></thead>
               <tbody>
-                {!profileMembers.length ? <tr><td className="table-state" colSpan="5">Nenhum perfil cadastrado.</td></tr> : profileMembers.map((member) => <tr key={member.id}>
+                {!profileMembers.length ? <tr><td className="table-state" colSpan="6">Nenhum perfil cadastrado.</td></tr> : profileMembers.map((member) => <tr key={member.id}>
                   <td><div className="profile-member-cell"><span className={`avatar ${Number(member.id) % 2 ? 'avatar-indigo' : 'avatar-teal'}`}>{getInitials(member.name)}</span><strong>{member.name}</strong></div></td>
+                  <td>{member.profile_type || 'Técnico'}</td>
                   <td>{member.email || '—'}</td>
                   <td>{member.department}</td>
                   <td><span className={`profile-state${member.active ? ' active' : ''}`}><span />{member.active ? 'Ativo' : 'Inativo'}</span></td>
                   <td><div className="profile-actions">
                     <button className="row-action" title="Editar perfil" aria-label={`Editar ${member.name}`} onClick={() => openMemberForm(member)}><Pencil size={15} /></button>
+                    {LOCAL_MODE && member.email && <button className="row-action" title="Redefinir senha" aria-label={`Redefinir senha de ${member.name}`} onClick={() => openPasswordReset(member)}><KeyRound size={15} /></button>}
                     <button className={`row-action${member.active ? ' action-deactivate' : ' action-activate'}`} title={member.active ? 'Desativar perfil' : 'Ativar perfil'} aria-label={`${member.active ? 'Desativar' : 'Ativar'} ${member.name}`} onClick={() => toggleMemberActive(member)}>{member.active ? <UserX size={15} /> : <UserCheck size={15} />}</button>
                   </div></td>
                 </tr>)}
@@ -1018,14 +1057,21 @@ function App() {
 
       {modal && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setModal(null) }}>
         <section className={`modal-card${modal === 'history' ? ' history-modal' : ''}`} role="dialog" aria-modal="true" aria-labelledby="modal-title">
-          <div className="modal-header"><div><span className="modal-kicker">{modal === 'create' ? 'NOVA TAREFA' : modal === 'history' ? 'ACOMPANHAMENTO' : modal === 'member' ? 'ADMINISTRAÇÃO DE TESTE' : 'MOVIMENTAÇÃO'}</span><h2 id="modal-title">{modal === 'create' ? 'Criar tarefa' : modal === 'history' ? 'Histórico da tarefa' : modal === 'member' ? selectedMember ? 'Editar perfil' : 'Novo perfil' : modal === 'return' ? 'Devolver tarefa' : 'Encaminhar tarefa'}</h2></div><button className="icon-button" onClick={() => setModal(null)} aria-label="Fechar"><X size={18} /></button></div>
+          <div className="modal-header"><div><span className="modal-kicker">{modal === 'create' ? 'NOVA TAREFA' : modal === 'history' ? 'ACOMPANHAMENTO' : modal === 'member' || modal === 'resetPassword' ? 'ADMINISTRAÇÃO DE TESTE' : 'MOVIMENTAÇÃO'}</span><h2 id="modal-title">{modal === 'create' ? 'Criar tarefa' : modal === 'history' ? 'Histórico da tarefa' : modal === 'member' ? selectedMember ? 'Editar perfil' : 'Novo perfil' : modal === 'resetPassword' ? 'Redefinir senha' : modal === 'return' ? 'Devolver tarefa' : 'Encaminhar tarefa'}</h2></div><button className="icon-button" onClick={() => setModal(null)} aria-label="Fechar"><X size={18} /></button></div>
           {error && <div className="alert alert-error modal-alert" role="alert">{error}<button onClick={() => setError('')} aria-label="Fechar"><X size={16} /></button></div>}
           {modal === 'member' && <form onSubmit={submitMemberProfile} className="modal-form">
             <label>Nome<input name="name" defaultValue={selectedMember?.name || ''} placeholder="Nome do perfil" required maxLength="120" /></label>
             <label>E-mail <span className="optional-label">(opcional)</span><input name="email" type="email" defaultValue={selectedMember?.email || ''} placeholder="nome@exemplo.com" maxLength="180" /></label>
-            <label>Departamento<input name="department" defaultValue={selectedMember?.department || ''} placeholder="Ex.: Atendimento" required maxLength="80" /></label>
-            <p className="form-hint"><CircleHelp size={14} /> O login deste ambiente é temporário; este perfil não cria uma senha.</p>
+            <label>Tipo de perfil<select name="profile_type" defaultValue={selectedMember?.profile_type || 'Técnico'} required><option value="Secretário">Secretário</option><option value="Gestor">Gestor</option><option value="Técnico">Técnico</option></select></label>
+            <label>Departamento<select name="department" defaultValue={selectedMember?.department || ''} required><option value="" disabled>Selecione um departamento</option>{Array.from(new Set([...profileMembers.map((member) => member.department), 'Administrativo', 'Atendimento', 'Compras', 'Financeiro', 'Jurídico', 'Operações', 'Planejamento', 'Tecnologia da Informação'].filter(Boolean))).map((department) => <option key={department} value={department}>{department}</option>)}</select></label>
+            <p className="form-hint"><CircleHelp size={14} /> {LOCAL_MODE ? 'O acesso local usa e-mail e senha; redefina a senha deste perfil pela lista de perfis.' : 'O login deste ambiente é temporário; este perfil não cria uma senha.'}</p>
             <div className="modal-actions"><button type="button" className="button button-secondary" onClick={() => setModal(null)}>Cancelar</button><button className="button button-primary" disabled={saving}>{saving ? <LoaderCircle className="spinner" size={16} /> : selectedMember ? <Check size={16} /> : <UserPlus size={16} />}{selectedMember ? 'Salvar alterações' : 'Criar perfil'}</button></div>
+          </form>}
+          {modal === 'resetPassword' && <form onSubmit={submitPasswordReset} className="modal-form">
+            <p className="form-hint"><CircleHelp size={14} /> Defina uma nova senha para a conta local de <strong>{selectedMember?.email}</strong>. Se ainda não houver conta, ela será criada.</p>
+            <label>Nova senha<input name="password" type="password" autoComplete="new-password" placeholder="Mínimo de 8 caracteres" required minLength="8" maxLength="256" /></label>
+            <label>Confirmar nova senha<input name="confirmPassword" type="password" autoComplete="new-password" placeholder="Digite a senha novamente" required minLength="8" maxLength="256" /></label>
+            <div className="modal-actions"><button type="button" className="button button-secondary" onClick={() => setModal(null)}>Cancelar</button><button className="button button-primary" disabled={saving}>{saving ? <LoaderCircle className="spinner" size={16} /> : <KeyRound size={16} />} Redefinir senha</button></div>
           </form>}
           {modal === 'create' && <form onSubmit={submitTask} className="modal-form">
             <label>Título da tarefa<input name="title" placeholder="Ex.: Revisar contrato do cliente" required maxLength="180" /></label><label>Descrição<textarea name="description" placeholder="Adicione detalhes importantes para a equipe" rows="3" /></label>

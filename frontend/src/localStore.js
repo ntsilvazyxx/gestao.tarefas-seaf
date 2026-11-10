@@ -3,11 +3,12 @@ const ACCOUNTS_STORAGE_KEY = 'fluxo.localAccounts.v1'
 const PASSWORD_HASH_ITERATIONS = 120000
 
 const initialMembers = [
-  { id: 1, name: 'Maria Silva', department: 'Operações', email: 'maria.silva@seaf.mt.gov.br' },
-  { id: 2, name: 'Rafael Costa', department: 'Financeiro', email: 'rafael.costa@seaf.mt.gov.br' },
-  { id: 3, name: 'Ana Souza', department: 'Atendimento', email: 'ana.souza@seaf.mt.gov.br' },
-  { id: 4, name: 'Lucas Martins', department: 'Operações', email: 'lucas.martins@seaf.mt.gov.br' },
+  { id: 1, name: 'Maria Silva', department: 'Operações', email: 'maria.silva@seaf.mt.gov.br', profile_type: 'Técnico' },
+  { id: 2, name: 'Rafael Costa', department: 'Financeiro', email: 'rafael.costa@seaf.mt.gov.br', profile_type: 'Técnico' },
+  { id: 3, name: 'Ana Souza', department: 'Atendimento', email: 'ana.souza@seaf.mt.gov.br', profile_type: 'Técnico' },
+  { id: 4, name: 'Lucas Martins', department: 'Operações', email: 'lucas.martins@seaf.mt.gov.br', profile_type: 'Técnico' },
 ]
+const profileTypes = ['Secretário', 'Gestor', 'Técnico']
 
 function readLocalAccounts() {
   const saved = localStorage.getItem(ACCOUNTS_STORAGE_KEY)
@@ -76,6 +77,35 @@ export async function registerLocalAccount({ name, email, password }) {
   const salt = Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)))
   const passwordHash = await hashLocalPassword(password, salt)
   accounts.push({ name: normalizedName, email: normalizedEmail, salt, passwordHash })
+  saveLocalAccounts(accounts)
+  return { name: normalizedName, email: normalizedEmail }
+}
+
+export async function resetLocalAccountPassword({ name, email, password }) {
+  const normalizedName = String(name || '').trim()
+  const normalizedEmail = String(email || '').trim().toLowerCase()
+  if (!normalizedName || normalizedName.length > 120) {
+    throw new Error('Informe um nome de até 120 caracteres.')
+  }
+  if (normalizedEmail.length > 180 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+    throw new Error('O perfil precisa ter um e-mail válido para redefinir a senha.')
+  }
+  if (typeof password !== 'string' || password.length < 8 || password.length > 256) {
+    throw new Error('A senha deve ter entre 8 e 256 caracteres.')
+  }
+  if (!globalThis.crypto?.getRandomValues) {
+    throw new Error('Este navegador não oferece suporte ao reset de senha local seguro.')
+  }
+
+  const accounts = readLocalAccounts()
+  const salt = Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)))
+  const passwordHash = await hashLocalPassword(password, salt)
+  const account = accounts.find((item) => item.email === normalizedEmail)
+  if (account) {
+    Object.assign(account, { name: normalizedName, salt, passwordHash })
+  } else {
+    accounts.push({ name: normalizedName, email: normalizedEmail, salt, passwordHash })
+  }
   saveLocalAccounts(accounts)
   return { name: normalizedName, email: normalizedEmail }
 }
@@ -160,22 +190,28 @@ export function loadLocalData() {
 }
 
 export function loadLocalMembers() {
-  return readData().members.map((member) => ({ ...member, active: member.active !== false }))
+  return readData().members.map((member) => ({
+    ...member,
+    profile_type: profileTypes.includes(member.profile_type) ? member.profile_type : 'Técnico',
+    active: member.active !== false,
+  }))
 }
 
 function validateLocalMember(profile, members, excludedId = null) {
   const name = String(profile.name || '').trim()
   const department = String(profile.department || '').trim()
   const email = String(profile.email || '').trim().toLowerCase()
+  const profileType = String(profile.profile_type || '')
   if (!name || name.length > 120) throw new Error('Informe um nome de até 120 caracteres.')
   if (!department || department.length > 80) throw new Error('Informe um departamento de até 80 caracteres.')
+  if (!profileTypes.includes(profileType)) throw new Error('Selecione um tipo de perfil válido.')
   if (email.length > 180 || (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
     throw new Error('Informe um e-mail válido de até 180 caracteres ou deixe o campo vazio.')
   }
   if (email && members.some((member) => member.id !== excludedId && member.email?.toLowerCase() === email)) {
     throw new Error('Já existe um perfil com esse e-mail.')
   }
-  return { name, department, email: email || null }
+  return { name, department, email: email || null, profile_type: profileType }
 }
 
 export function createLocalMember(profile) {
@@ -205,7 +241,11 @@ export function updateLocalMember(memberId, profile) {
     })
   }
   saveData(data)
-  return { ...member, active: member.active !== false }
+  return {
+    ...member,
+    profile_type: profileTypes.includes(member.profile_type) ? member.profile_type : 'Técnico',
+    active: member.active !== false,
+  }
 }
 
 export function setLocalMemberActive(memberId, active) {
@@ -214,7 +254,10 @@ export function setLocalMemberActive(memberId, active) {
   if (!member) throw new Error('Perfil não encontrado.')
   member.active = Boolean(active)
   saveData(data)
-  return { ...member }
+  return {
+    ...member,
+    profile_type: profileTypes.includes(member.profile_type) ? member.profile_type : 'Técnico',
+  }
 }
 
 export function createLocalTask(payload) {

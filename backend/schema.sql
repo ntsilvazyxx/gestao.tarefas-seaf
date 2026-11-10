@@ -7,6 +7,7 @@ USE gestao_tarefas;
 CREATE TABLE IF NOT EXISTS team_members (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT,
   name VARCHAR(120) NOT NULL,
+  profile_type ENUM('Secretário', 'Gestor', 'Técnico') NOT NULL DEFAULT 'Técnico',
   department VARCHAR(80) NOT NULL DEFAULT 'Geral',
   email VARCHAR(180) NULL,
   active BOOLEAN NOT NULL DEFAULT TRUE,

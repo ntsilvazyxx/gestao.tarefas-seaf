@@ -165,21 +165,25 @@ function validateMemberProfile(body) {
   const name = typeof body.name === 'string' ? body.name.trim() : ''
   const department = typeof body.department === 'string' ? body.department.trim() : ''
   const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''
+  const profileType = typeof body.profile_type === 'string' ? body.profile_type : ''
   if (!name || name.length > 120) return { error: 'Informe um nome de até 120 caracteres.' }
   if (!department || department.length > 80) return { error: 'Informe um departamento de até 80 caracteres.' }
+  if (!['Secretário', 'Gestor', 'Técnico'].includes(profileType)) {
+    return { error: 'Selecione um tipo de perfil válido.' }
+  }
   if (email.length > 180 || (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
     return { error: 'Informe um e-mail válido de até 180 caracteres ou deixe o campo vazio.' }
   }
   if (body.active !== undefined && typeof body.active !== 'boolean') {
     return { error: 'O status do perfil é inválido.' }
   }
-  return { profile: { name, department, email: email || null, active: body.active ?? true } }
+  return { profile: { name, profile_type: profileType, department, email: email || null, active: body.active ?? true } }
 }
 
 app.get('/api/admin/members', requireTestAdmin, async (request, response, next) => {
   try {
     const [members] = await pool.execute(
-      'SELECT id, name, department, email, active, created_at FROM team_members ORDER BY active DESC, name',
+      'SELECT id, name, profile_type, department, email, active, created_at FROM team_members ORDER BY active DESC, name',
     )
     response.json(members)
   } catch (error) {
@@ -190,18 +194,18 @@ app.get('/api/admin/members', requireTestAdmin, async (request, response, next) 
 app.post('/api/admin/members', requireTestAdmin, async (request, response, next) => {
   const validation = validateMemberProfile(request.body || {})
   if (validation.error) return response.status(400).json({ error: validation.error })
-  const { name, department, email, active } = validation.profile
+  const { name, profile_type, department, email, active } = validation.profile
   try {
     if (email) {
       const [existing] = await pool.execute('SELECT id FROM team_members WHERE LOWER(email) = ?', [email])
       if (existing.length) return response.status(409).json({ error: 'Já existe um perfil com esse e-mail.' })
     }
     const [result] = await pool.execute(
-      'INSERT INTO team_members (name, department, email, active) VALUES (?, ?, ?, ?)',
-      [name, department, email, active],
+      'INSERT INTO team_members (name, profile_type, department, email, active) VALUES (?, ?, ?, ?, ?)',
+      [name, profile_type, department, email, active],
     )
     const [created] = await pool.execute(
-      'SELECT id, name, department, email, active, created_at FROM team_members WHERE id = ?',
+      'SELECT id, name, profile_type, department, email, active, created_at FROM team_members WHERE id = ?',
       [result.insertId],
     )
     response.status(201).json(created[0])
@@ -217,7 +221,7 @@ app.patch('/api/admin/members/:id', requireTestAdmin, async (request, response, 
   try {
     await connection.beginTransaction()
     const [rows] = await connection.execute(
-      'SELECT id, name, department, email, active FROM team_members WHERE id = ? FOR UPDATE',
+      'SELECT id, name, profile_type, department, email, active FROM team_members WHERE id = ? FOR UPDATE',
       [memberId],
     )
     if (!rows.length) {
@@ -234,7 +238,7 @@ app.patch('/api/admin/members/:id', requireTestAdmin, async (request, response, 
       await connection.rollback()
       return response.status(400).json({ error: validation.error })
     }
-    const { name, department, email, active } = validation.profile
+    const { name, profile_type, department, email, active } = validation.profile
     if (email) {
       const [existing] = await connection.execute(
         'SELECT id FROM team_members WHERE LOWER(email) = ? AND id <> ?',
@@ -246,8 +250,8 @@ app.patch('/api/admin/members/:id', requireTestAdmin, async (request, response, 
       }
     }
     await connection.execute(
-      'UPDATE team_members SET name = ?, department = ?, email = ?, active = ? WHERE id = ?',
-      [name, department, email, active, memberId],
+      'UPDATE team_members SET name = ?, profile_type = ?, department = ?, email = ?, active = ? WHERE id = ?',
+      [name, profile_type, department, email, active, memberId],
     )
     if (department !== rows[0].department) {
       await connection.execute(
@@ -256,7 +260,7 @@ app.patch('/api/admin/members/:id', requireTestAdmin, async (request, response, 
       )
     }
     const [updated] = await connection.execute(
-      'SELECT id, name, department, email, active, created_at FROM team_members WHERE id = ?',
+      'SELECT id, name, profile_type, department, email, active, created_at FROM team_members WHERE id = ?',
       [memberId],
     )
     await connection.commit()
